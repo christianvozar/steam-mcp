@@ -160,15 +160,36 @@ pub fn prompts() -> Vec<PromptDef> {
 }
 
 /// Visible prompts for a caller.
+/// Visible prompts for a caller. A prompt is hidden when any resource it
+/// embeds is unavailable (scope, credential, or a disabled backing tool), so
+/// reloading `STEAM_MCP_DISABLED_TOOLS` can change the list and trigger
+/// `notifications/prompts/list_changed`.
 pub fn visible<'a>(core: &Core, ctx: &RequestContext, defs: &'a [PromptDef]) -> Vec<&'a PromptDef> {
     defs.iter()
         .filter(|p| ctx.principal.has_scope(p.scope) && core.steam.has_key(p.key))
+        .filter(|p| p.embeds.iter().all(|e| embed_available(core, ctx, e)))
         .collect()
+}
+
+fn embed_available(core: &Core, ctx: &RequestContext, template: &str) -> bool {
+    let sample = template
+        .replace("{appid}", "1")
+        .replace("{steamid}", "76561197960287930")
+        .replace("{date}", "2026-01-01");
+    match super::resources::resolve(&sample) {
+        Some(super::resources::Resolved::Static(s)) => {
+            super::resources::available(core, s.tool, ctx)
+        }
+        Some(super::resources::Resolved::Template(t, _)) => {
+            super::resources::available(core, t.tool, ctx)
+        }
+        _ => false,
+    }
 }
 
 pub fn to_json(p: &PromptDef) -> Value {
     let args: Vec<Value> = p.args.iter().map(|a| obj! { "name" => a.name, "title" => a.title, "description" => a.description, "required" => a.required }).collect();
-    obj! { "name" => p.name, "title" => p.title, "description" => p.description, "arguments" => args, "icons" => crate::arr![super::protocol::server_icon()] }
+    obj! { "name" => p.name, "title" => p.title, "description" => p.description, "arguments" => args, "icons" => crate::arr![super::protocol::scope_icon(p.scope)] }
 }
 
 fn fill(template: &str, args: &BTreeMap<String, String>) -> String {

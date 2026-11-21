@@ -1105,3 +1105,143 @@ fn cache_admin_tools() {
         Some(0)
     );
 }
+
+#[test]
+fn url_elicitation_hands_off_to_steamworks() {
+    let mock = start_mock();
+    let core = core_with(&mock, &[("STEAM_MCP_ENABLE_WRITES", "true")]);
+    let caps = obj! { "elicitation" => obj! { "url" => obj! {} } };
+    let args = obj! { "appid" => 480, "buildid" => 101, "betakey" => "public" };
+    let (r, _) = send(
+        &core,
+        &request(
+            1,
+            "tools/call",
+            obj! { "name" => "steam_partner_set_app_build_live", "arguments" => args.clone() },
+            caps.clone(),
+        ),
+    );
+    let req = &r["result"]["inputRequests"]["steamworks"];
+    assert_eq!(req["params"]["mode"].as_str(), Some("url"), "{r}");
+    assert_eq!(
+        req["params"]["url"].as_str(),
+        Some("https://partner.steamgames.com/apps/builds/480")
+    );
+    assert!(
+        req["params"].get("elicitationId").is_none(),
+        "removed in 2026-07-28"
+    );
+    let state = r["result"]["requestState"].as_str().unwrap();
+    let accept = obj! { "steamworks" => obj! { "action" => "accept" } };
+    let (r, _) = send(
+        &core,
+        &request(
+            2,
+            "tools/call",
+            obj! { "name" => "steam_partner_set_app_build_live", "arguments" => args, "inputResponses" => accept, "requestState" => state },
+            caps,
+        ),
+    );
+    assert_eq!(
+        r["result"]["structuredContent"]["apiChangeMade"].as_bool(),
+        Some(false),
+        "{r}"
+    );
+    assert!(
+        mock.posts.lock().unwrap().is_empty(),
+        "no write is made by the server"
+    );
+}
+
+#[test]
+fn listings_carry_icons() {
+    let mock = start_mock();
+    let core = core_with(&mock, &[]);
+    for (method, key) in [
+        ("tools/list", "tools"),
+        ("resources/list", "resources"),
+        ("resources/templates/list", "resourceTemplates"),
+        ("prompts/list", "prompts"),
+    ] {
+        let (r, _) = send(&core, &request(1, method, obj! {}, obj! {}));
+        let items = r["result"][key].as_array().unwrap();
+        assert!(!items.is_empty());
+        for it in items {
+            let src = it["icons"][0]["src"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{method} item without icon: {it}"));
+            assert!(src.starts_with("data:image/svg+xml;base64,"));
+        }
+    }
+}
+
+#[test]
+fn config_reload_notifies_list_changes() {
+    let mock = start_mock();
+    let dir = std::env::temp_dir().join(format!(
+        "steam-mcp-reload-{}",
+        steam_mcp::util::crypto::random_id(4)
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("steam-mcp.conf");
+    let base = format!(
+        "STEAM_API_KEY={KEY}\nSTEAM_PUBLISHER_KEY={PUB_KEY}\nSTEAM_MCP_API_BASE={b}\nSTEAM_MCP_PARTNER_BASE={b}\nSTEAM_MCP_STORE_BASE={b}\nSTEAM_MCP_USE_PROXY_ENV=false\nSTEAM_MCP_LOG=error\n",
+        b = mock.base
+    );
+    std::fs::write(&file, &base).unwrap();
+    let sources = steam_mcp::config::Sources {
+        file: Some(file.clone()),
+        ..Default::default()
+    };
+    let cfg = steam_mcp::config::Config::load(&sources).unwrap();
+    let core =
+        steam_mcp::mcp::server::Core::new(steam_mcp::config::ConfigHandle::new(cfg, sources))
+            .unwrap();
+    core.watch_tick(); // record config mtime and list hashes
+
+    let cap = std::sync::Arc::new(Capture::default());
+    let msg = request(
+        5,
+        "subscriptions/listen",
+        obj! { "notifications" => obj! { "toolsListChanged" => true, "promptsListChanged" => true } },
+        obj! {},
+    );
+    core.handle_message(
+        &msg,
+        Principal::local(),
+        steam_mcp::mcp::context::Transport::Internal,
+        cap.clone(),
+        steam_mcp::util::CancelToken::new(),
+    );
+
+    // Disabling the overview tool hides it and the prompt that embeds it.
+    std::thread::sleep(Duration::from_millis(1100)); // ensure a new mtime
+    std::fs::write(
+        &file,
+        format!("{base}STEAM_MCP_DISABLED_TOOLS=steam_get_app_overview\n"),
+    )
+    .unwrap();
+    core.watch_tick();
+    let methods: Vec<String> = cap
+        .messages()
+        .iter()
+        .filter_map(|m| m["method"].as_str().map(String::from))
+        .collect();
+    assert!(
+        methods.contains(&"notifications/tools/list_changed".to_string()),
+        "{methods:?}"
+    );
+    assert!(
+        methods.contains(&"notifications/prompts/list_changed".to_string()),
+        "{methods:?}"
+    );
+    let (r, _) = send(&core, &request(6, "prompts/list", obj! {}, obj! {}));
+    assert!(
+        !r["result"]["prompts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["name"].as_str() == Some("game_health_report"))
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
