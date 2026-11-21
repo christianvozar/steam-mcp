@@ -2,3 +2,4 @@
 //! the Steam Web API, Steam storefront and Steamworks partner APIs.
 
 pub mod json;
+pub mod util;
