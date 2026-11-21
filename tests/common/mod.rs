@@ -28,6 +28,10 @@ pub struct Mock {
     pub posts: Arc<Mutex<Vec<(String, String)>>>,
     pub players: Arc<AtomicU64>,
     pub sales_delay_ms: Arc<AtomicU64>,
+    /// JWKS document served at /jwks.
+    pub jwks: Arc<Mutex<String>>,
+    /// Audience reported by /introspect for active tokens.
+    pub introspect_aud: Arc<Mutex<String>>,
 }
 
 impl Mock {
@@ -42,6 +46,7 @@ fn respond(
     path: &str,
     q: &HashMap<String, String>,
     body: &str,
+    authorization: Option<&str>,
 ) -> (u16, String) {
     *mock
         .hits
@@ -136,6 +141,37 @@ fn respond(
             };
             (200, obj! { "response" => obj! { "apps" => apps, "have_more_results" => more, "last_appid" => if more { 570 } else { 1000 } } }.to_string())
         }
+        "/jwks" => (200, mock.jwks.lock().unwrap().clone()),
+        "/introspect" => {
+            let expected = format!(
+                "Basic {}",
+                steam_mcp::util::encoding::b64_encode(b"mcp-client:s3cret")
+            );
+            if authorization != Some(expected.as_str()) {
+                return (401, r#"{"error":"invalid_client"}"#.into());
+            }
+            let now = steam_mcp::util::time::now_secs();
+            match q.get("token").map(String::as_str) {
+                Some("good-token") => (
+                    200,
+                    obj! {
+                        "active" => true,
+                        "sub" => "svc-account",
+                        "aud" => mock.introspect_aud.lock().unwrap().clone(),
+                        "iss" => "https://auth.example.com",
+                        "scope" => "steam:partner",
+                        "exp" => now + 300,
+                    }
+                    .to_string(),
+                ),
+                Some("other-aud") => (
+                    200,
+                    obj! { "active" => true, "sub" => "x", "aud" => "https://elsewhere.example.com", "exp" => now + 300 }
+                        .to_string(),
+                ),
+                _ => (200, r#"{"active":false}"#.into()),
+            }
+        }
         "/flaky" => (503, "down".into()),
         _ => (404, "not found".into()),
     }
@@ -151,6 +187,8 @@ pub fn start_mock() -> Mock {
         posts: Arc::new(Mutex::new(Vec::new())),
         players: Arc::new(AtomicU64::new(0)),
         sales_delay_ms: Arc::new(AtomicU64::new(0)),
+        jwks: Arc::new(Mutex::new("{\"keys\":[]}".into())),
+        introspect_aud: Arc::new(Mutex::new(String::new())),
     };
     let m = mock.clone();
     std::thread::spawn(move || {
@@ -167,7 +205,14 @@ pub fn start_mock() -> Mock {
                     if req.method == "POST" {
                         q.extend(parse_query(&body));
                     }
-                    let (status, resp) = respond(&m, &req.method, &req.path, &q, &body);
+                    let (status, resp) = respond(
+                        &m,
+                        &req.method,
+                        &req.path,
+                        &q,
+                        &body,
+                        req.headers.get("authorization"),
+                    );
                     if write_response(
                         reader.get_mut(),
                         status,
