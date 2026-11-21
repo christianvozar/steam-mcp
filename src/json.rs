@@ -110,6 +110,29 @@ impl Map {
         self.entries.push((key, value));
     }
 
+    /// Removes duplicate keys, keeping the last occurrence of each (the value
+    /// lookups already returned). Keeps parsed maps canonical so equality,
+    /// serialization and every consumer agree on a single value per key.
+    fn dedup_last_wins(&mut self) {
+        if self.entries.len() < 2 {
+            return;
+        }
+        let mut seen = std::collections::HashSet::with_capacity(self.entries.len());
+        let mut keep = vec![false; self.entries.len()];
+        for (i, (k, _)) in self.entries.iter().enumerate().rev() {
+            keep[i] = seen.insert(k.as_str());
+        }
+        if keep.iter().all(|k| *k) {
+            return;
+        }
+        let mut i = 0;
+        self.entries.retain(|_| {
+            let k = keep[i];
+            i += 1;
+            k
+        });
+    }
+
     pub fn get(&self, key: &str) -> Option<&Value> {
         self.entries
             .iter()
@@ -803,6 +826,7 @@ impl<'a> Parser<'a> {
                 Some(b',') => self.i += 1,
                 Some(b'}') => {
                     self.i += 1;
+                    m.dedup_last_wins();
                     return Ok(Value::Object(m));
                 }
                 _ => return Err(self.err("expected ',' or '}' in object")),
@@ -970,6 +994,13 @@ mod tests {
         assert_eq!(v, again);
         let pretty = parse(&v.to_pretty_string()).unwrap();
         assert_eq!(v, pretty);
+    }
+
+    #[test]
+    fn duplicate_keys_last_wins() {
+        let v = parse(r#"{"id":"x","a":1,"id":2}"#).unwrap();
+        assert_eq!(v.to_string(), r#"{"a":1,"id":2}"#);
+        assert_eq!(v["id"].as_i64(), Some(2));
     }
 
     #[test]
