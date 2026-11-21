@@ -354,15 +354,23 @@ impl Authenticator {
                 }
             }
         }
-        // Unknown kid or stale cache: refresh at most once a minute.
-        {
+        // A missing or expired JWKS is always fetched. A fresh JWKS that lacks
+        // the requested kid (key rotation) is refetched at most once a minute,
+        // so forged kids cannot be used to hammer the authorization server.
+        let fresh = self
+            .jwks
+            .lock()
+            .map(|j| {
+                j.as_ref()
+                    .is_some_and(|j| j.fetched.elapsed() < Duration::from_secs(3600))
+            })
+            .unwrap_or(false);
+        if fresh {
             let mut last = self
                 .last_jwks_refresh
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
-            if last.is_some_and(|t| t.elapsed() < Duration::from_secs(60))
-                && self.jwks.lock().map(|j| j.is_some()).unwrap_or(false)
-            {
+            if last.is_some_and(|t| t.elapsed() < Duration::from_secs(60)) {
                 return Err(AuthFailure::invalid("Signing key not found"));
             }
             *last = Some(Instant::now());
