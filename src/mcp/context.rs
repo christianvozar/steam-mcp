@@ -12,6 +12,11 @@ use crate::util::CancelToken;
 pub trait Sink: Send + Sync {
     /// Sends a message; returns false if the destination is gone.
     fn send(&self, msg: &Value) -> bool;
+
+    /// Emits a transport keep-alive (SSE comment); false if the peer is gone.
+    fn keepalive(&self) -> bool {
+        true
+    }
 }
 
 /// Discards everything (used for task workers and HTTP JSON responses).
