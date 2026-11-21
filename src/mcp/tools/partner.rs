@@ -1011,16 +1011,19 @@ fn set_build_live(env: &ToolEnv, args: &Map) -> ToolOutcome {
             "State-changing tools are disabled. Set STEAM_MCP_ENABLE_WRITES=true to allow them.",
         );
     }
+    let appid = arg_u64(args, "appid").unwrap_or(0);
+    let buildid = arg_u64(args, "buildid").unwrap_or(0);
+    let betakey = arg_str(args, "betakey").unwrap_or("public");
+    let description = arg_str(args, "description");
     if !env.ctx.supports_elicitation_form() {
+        if env.ctx.supports_elicitation_url() {
+            return steamworks_handoff(env, appid, buildid, betakey);
+        }
         return ToolOutcome::Error(McpError::missing_capability(
             obj! { "elicitation" => obj! { "form" => obj! {} } },
             "setting a build live requires explicit user confirmation via form elicitation",
         ));
     }
-    let appid = arg_u64(args, "appid").unwrap_or(0);
-    let buildid = arg_u64(args, "buildid").unwrap_or(0);
-    let betakey = arg_str(args, "betakey").unwrap_or("public");
-    let description = arg_str(args, "description");
 
     let confirmed_step = env
         .mrtr
@@ -1114,6 +1117,58 @@ fn set_build_live(env: &ToolEnv, args: &Map) -> ToolOutcome {
     ToolOutcome::InputRequired {
         requests,
         state: Some(obj! { "step" => "confirm" }),
+    }
+}
+
+/// URL-mode elicitation fallback: the server never performs the write; it
+/// sends the user to the Steamworks builds page to make the change there,
+/// then reports the outcome when the client retries.
+fn steamworks_handoff(env: &ToolEnv, appid: u64, buildid: u64, betakey: &str) -> ToolOutcome {
+    let url = format!("https://partner.steamgames.com/apps/builds/{appid}");
+    let handed_off = env
+        .mrtr
+        .state
+        .as_ref()
+        .is_some_and(|s| s["step"].as_str() == Some("url_handoff"));
+    if let (true, Some(answer)) = (handed_off, env.mrtr.response("steamworks")) {
+        return match answer["action"].as_str() {
+            Some("accept") => {
+                // The branch may have changed out of band: refresh partner build data.
+                let prefix = "partner:/ISteamApps/GetApp";
+                env.steam().cache.invalidate_where(|k| {
+                    k.starts_with(prefix) && k.contains(&format!("appid={appid}"))
+                });
+                crate::log_info!(
+                    "audit",
+                    "build change handed off to Steamworks",
+                    appid = appid,
+                    buildid = buildid,
+                    betakey = betakey,
+                    principal = env.ctx.principal.id
+                );
+                ok_result(
+                    format!(
+                        "Opened Steamworks for app {appid}. Set build {buildid} live on '{betakey}' there; this server made no API change. Cached branch data was refreshed, so steam_partner_get_app_betas shows the result."
+                    ),
+                    obj! { "appid" => appid, "buildid" => buildid, "betakey" => betakey, "handoff" => true, "url" => url.as_str(), "apiChangeMade" => false },
+                    &[],
+                )
+            }
+            _ => tool_error("The user did not open Steamworks; no build was changed."),
+        };
+    }
+    let mut requests = Map::new();
+    requests.insert("steamworks", obj! {
+        "method" => "elicitation/create",
+        "params" => obj! {
+            "mode" => "url",
+            "message" => format!("This client cannot show a confirmation form. Open Steamworks to set build {buildid} live on branch '{betakey}' for app {appid} yourself."),
+            "url" => url.as_str(),
+        },
+    });
+    ToolOutcome::InputRequired {
+        requests,
+        state: Some(obj! { "step" => "url_handoff" }),
     }
 }
 
