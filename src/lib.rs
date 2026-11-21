@@ -5,3 +5,4 @@ pub mod json;
 pub mod util;
 
 pub mod http;
+pub mod cache;
