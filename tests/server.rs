@@ -896,6 +896,23 @@ fn completion_uses_partner_apps_and_catalog() {
         r["result"]["completion"]["values"][0].as_str(),
         Some("2026/07/02")
     );
+    // context.arguments excludes the app under analysis and apps already listed.
+    let (r, _) = send(
+        &core,
+        &request(
+            5,
+            "completion/complete",
+            obj! { "ref" => obj! { "type" => "ref/prompt", "name" => "competitor_comparison" }, "argument" => obj! { "name" => "competitors", "value" => "10,counter" }, "context" => obj! { "arguments" => obj! { "appid" => "570" } } },
+            obj! {},
+        ),
+    );
+    let vals: Vec<&str> = r["result"]["completion"]["values"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert_eq!(vals, vec!["10,730"], "{r}");
 }
 
 #[test]

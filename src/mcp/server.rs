@@ -852,7 +852,16 @@ impl Core {
             }
         };
         let (values, total, has_more) = if known {
-            completion::complete(self, ctx, arg_name, value)
+            let context: std::collections::BTreeMap<String, String> = p
+                .at(&["context", "arguments"])
+                .as_object()
+                .map(|m| {
+                    m.iter()
+                        .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                        .collect()
+                })
+                .unwrap_or_default();
+            completion::complete(self, ctx, arg_name, value, &context)
         } else {
             (Vec::new(), 0, false)
         };

@@ -161,7 +161,17 @@ fn complete_date(core: &Arc<Core>, ctx: &RequestContext, value: &str) -> Complet
 }
 
 /// Completes `argument` given its name and current value.
-pub fn complete(core: &Arc<Core>, ctx: &RequestContext, arg_name: &str, value: &str) -> Completion {
+///
+/// `context` holds already-resolved arguments (`context.arguments`); it is
+/// used to avoid suggesting values that are already chosen, e.g. the app
+/// under analysis or apps already in a competitor list.
+pub fn complete(
+    core: &Arc<Core>,
+    ctx: &RequestContext,
+    arg_name: &str,
+    value: &str,
+    context: &std::collections::BTreeMap<String, String>,
+) -> Completion {
     match arg_name {
         "appid" => complete_appid(core, ctx, value),
         "competitors" | "appids" => {
@@ -170,7 +180,17 @@ pub fn complete(core: &Arc<Core>, ctx: &RequestContext, arg_name: &str, value: &
                 Some((h, l)) => (format!("{h},"), l.trim()),
                 None => (String::new(), value),
             };
-            let (vals, total, more) = complete_appid(core, ctx, last);
+            let mut taken: std::collections::HashSet<String> = head
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            if let Some(a) = context.get("appid") {
+                taken.insert(a.trim().to_string());
+            }
+            let (vals, _, _) = complete_appid(core, ctx, last);
+            let vals: Vec<String> = vals.into_iter().filter(|v| !taken.contains(v)).collect();
+            let (vals, total, more) = finish(vals);
             (
                 vals.into_iter().map(|v| format!("{head}{v}")).collect(),
                 total,
