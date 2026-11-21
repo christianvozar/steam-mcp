@@ -126,7 +126,7 @@ The tool list is filtered by the configured credentials and the caller's scopes.
 Notes:
 
 - **`steam_api_call`** is a generic GET passthrough for any Web API method that has no dedicated tool. Use `steam_get_supported_api_list` to discover methods. It refuses methods whose names look state-changing, and it caches results under a TTL class you choose.
-- **`steam_partner_set_app_build_live`** only appears when `STEAM_MCP_ENABLE_WRITES=true`. It requires a client that supports form elicitation. The user is shown the branch's current build and must type the app ID to confirm. The confirmation is bound to the call through an HMAC-sealed `requestState`.
+- **`steam_partner_set_app_build_live`** only appears when `STEAM_MCP_ENABLE_WRITES=true`. With a client that supports form elicitation, the user is shown the branch's current build and must type the app ID to confirm. The confirmation is bound to the call through an HMAC-sealed `requestState`. A client that only supports URL elicitation is handed off to the Steamworks builds page so the user can make the change there; the server makes no API write in that case.
 - **`steam_summarize_reviews`** uses MRTR sampling when the client supports it. Otherwise it returns themes ranked by term frequency.
 - **`export_report`** (stdio only) runs any read-only data tool and writes the result as CSV or JSON into the client's first root, obtained through MRTR `roots/list`. It never overwrites a file and neutralises CSV formula injection.
 - **Task-capable tools** (`steam_search_apps`, `steam_get_app_reviews`, `steam_compare_apps`, `steam_partner_get_detailed_sales`, `steam_partner_sales_summary`) return a task handle when the client declares the tasks extension and the work takes longer than `STEAM_MCP_TASK_SYNC_WINDOW_MS`. While running as a task, a multi-page sales fetch that reaches its page limit asks the user through `tasks/update` whether to continue.
@@ -191,7 +191,21 @@ Upstream protection includes:
 - The `Origin` header is validated. By default only loopback origins are allowed; set `STEAM_MCP_ALLOWED_ORIGINS` to change this. CORS preflight is supported.
 - Closing a response stream cancels the request.
 - Native TLS is available with `STEAM_MCP_TLS_CERT` and `STEAM_MCP_TLS_KEY`.
-- Operational endpoints: `/healthz`, `/readyz`, and `/metrics` (Prometheus format; requires `steam:admin` when auth is enabled).
+- Once a request starts arriving, it must be complete within `STEAM_MCP_REQUEST_READ_TIMEOUT` (default 30 s). This defeats slow-drip ("slowloris") clients. Idle keep-alive connections close after 60 s.
+- On Linux, peer hangups are detected with `poll(POLLRDHUP)`, so closing a TLS connection cancels its request even when a close_notify alert is still unread.
+- Operational endpoints: `/healthz`, `/readyz` (returns 503 while shutting down), and `/metrics` (Prometheus format; requires `steam:admin` when auth is enabled).
+
+### Shutdown
+
+On SIGTERM or SIGINT, and on stdin EOF in stdio mode, the server shuts down in order:
+
+1. It stops accepting work. New requests get `503`.
+2. It ends every `subscriptions/listen` stream with a completion result.
+3. It cancels tasks.
+4. It lets in-flight requests finish, for up to `STEAM_MCP_SHUTDOWN_GRACE` seconds (default 10).
+5. It writes the cache snapshot and exits 0.
+
+A second signal exits immediately.
 
 ### Authorization
 
@@ -229,7 +243,7 @@ Without authentication, which is the default for stdio, the caller is trusted fu
 | Versioning | `server/discover` with `supportedVersions`, capabilities, instructions and cache hints. `UnsupportedProtocolVersionError` (`-32022`) includes `supported` and `requested`. A legacy `initialize` gets an explanatory `-32022`. |
 | Error codes | `-32700` to `-32603`, `-32020` (HeaderMismatch), `-32021` (MissingRequiredClientCapability, with `requiredCapabilities`) and `-32022`. Application codes sit outside the reserved range. "Resource not found" uses `-32602`. |
 | MRTR | `InputRequiredResult` with `inputRequests` for elicitation (form), sampling and roots. `requestState` is HMAC-sealed and bound to the method, a parameter digest, the principal and an expiry. Requests are only sent when the client declares the matching capability. |
-| Tools | Listing (deterministic order, paginated, `ttlMs`/`cacheScope`), calling, `structuredContent` plus a text mirror, `outputSchema`, annotations, `isError` execution errors versus protocol errors, input validation (JSON Schema 2020-12 subset, local `$ref`, bounded), lenient coercion, `x-mcp-header`. |
+| Tools | Listing (deterministic order, paginated, `ttlMs`/`cacheScope`), calling, `structuredContent` plus a text mirror, `outputSchema`, annotations, `isError` execution errors versus protocol errors, input validation (JSON Schema 2020-12 subset including `pattern` via a bounded in-tree regex engine, local `$ref`, bounded), lenient coercion, `x-mcp-header`. |
 | Resources | List, templates, read with `ttlMs`/`cacheScope`, annotations (`audience`, `priority`), `lastModified` in content `_meta`, subscriptions with `notifications/resources/updated`, list-changed notifications. |
 | Prompts | List and get, embedded resources, icons, list-changed notifications, MRTR for missing arguments. |
 | Completion | `ref/prompt` and `ref/resource`, at most 100 values, `total` and `hasMore`. |
@@ -241,7 +255,8 @@ Without authentication, which is the default for stdio, the caller is trusted fu
 | Tasks extension | `io.modelcontextprotocol/tasks`: `CreateTaskResult` (`resultType: "task"`), `tasks/get`, `tasks/update` (mid-task elicitation), `tasks/cancel`, and `notifications/tasks` through `subscriptions/listen` `taskIds`. Tasks are owned by their principal. `-32021` for clients that don't declare the extension. |
 | Transports | stdio (newline-delimited, concurrent, cancellation, graceful EOF shutdown) and Streamable HTTP (described above). |
 | Authorization | Covered above. |
-| Icons | The server and prompts carry an inline SVG data-URI icon. |
+| Icons | The server, tools, resources, resource templates and prompts carry inline SVG data-URI icons for their scope category, so clients never fetch third-party URLs. |
+| Elicitation | Form mode (build confirmation, missing prompt arguments, continuing a multi-page task) and URL mode (Steamworks hand-off). |
 
 Roots and sampling are deprecated in 2026-07-28. They are used only where they are the natural fit (export destinations and review summaries), and each has a fallback.
 
@@ -278,7 +293,25 @@ cargo clippy --all-targets
 cargo fmt --check
 ```
 
-The integration tests start a mock Steam server and drive the dispatcher, the HTTP transport (over real sockets) and the stdio binary (as a subprocess). They cover caching and coalescing, stale-if-error, MRTR flows, tasks, subscriptions, auth challenges, header validation and graceful shutdown.
+The integration tests start a mock Steam server and drive the dispatcher, the HTTP transport (over real sockets) and the stdio binary (as a subprocess). They cover:
+
+- caching and coalescing, and stale-if-error;
+- MRTR flows (form and URL elicitation, sampling, roots), tasks and subscriptions;
+- auth: static tokens, HS256, RS256 through a fetched JWKS, and introspection;
+- header validation, slow-drip clients and TLS disconnects;
+- config hot reload;
+- shutdown on SIGTERM and on stdin EOF.
+
+`tests/fuzz.rs` runs seeded fuzzing of the JSON, HTTP, URI-template, base64 and regex code, sealed tokens, schema validation and the dispatcher. Set `FUZZ_SEED` and `FUZZ_ITERS` to explore further:
+
+```sh
+FUZZ_SEED=42 FUZZ_ITERS=200000 cargo test --release --test fuzz
+```
+
+Fuzzing found and fixed two issues:
+
+- Sealed tokens accepted non-canonical base64. Tokens are now strictly canonical.
+- Duplicate JSON object keys produced maps that equality and serialization disagreed on. The parser now keeps only the last value for each key.
 
 ## License
 

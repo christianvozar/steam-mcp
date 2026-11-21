@@ -13,5 +13,7 @@
 | [0009](0009-gated-writes.md) | Writes off by default and confirmed through elicitation | accepted |
 | [0010](0010-in-memory-tasks.md) | In-memory, principal-owned tasks with a synchronous window | accepted |
 | [0011](0011-deprecated-features.md) | Deprecated features only with fallbacks | accepted |
+| [0012](0012-graceful-shutdown.md) | Graceful shutdown on SIGTERM/SIGINT without extra crates | accepted |
+| [0013](0013-transport-hardening.md) | Read deadlines, hangup detection, canonical tokens and JSON | accepted |
 
 New ADRs copy [`0000-template.md`](0000-template.md) and take the next number.

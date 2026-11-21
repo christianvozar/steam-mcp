@@ -1,6 +1,6 @@
 # MCP 2026-07-28 compliance map
 
-This map links each normative requirement (from `mcp-2026-07-28/` and `mcp-ext-tasks/`) to the code that implements it and the test that covers it. Test names refer to `tests/server.rs` (S), `tests/http.rs` (H), `tests/stdio.rs` (IO), or unit tests in the named module (U).
+This map links each normative requirement (from `mcp-2026-07-28/` and `mcp-ext-tasks/`) to the code that implements it and the test that covers it. Test names refer to `tests/server.rs` (S), `tests/http.rs` (H), `tests/stdio.rs` (IO), `tests/lifecycle.rs` (L), `tests/auth.rs` (A), `tests/fuzz.rs` (F), or unit tests in the named module (U).
 
 ## Base protocol
 
@@ -30,13 +30,15 @@ This map links each normative requirement (from `mcp-2026-07-28/` and `mcp-ext-t
 | Server sends `notifications/cancelled` only for listen teardown | `Subscription::abort` | — |
 | Progress values strictly increase; only with a token | `RequestContext::progress` | S `progress_and_logging_notifications` |
 | Cancelled requests get no response | `handle_message` (cancel check), stdio worker | IO `concurrency_cancellation_and_shutdown` |
-| HTTP: closing the stream cancels the request | `transport/http.rs` `spawn_disconnect_monitor`, SSE keep-alive | H `subscription_stream_lifecycle` |
+| HTTP: closing the stream cancels the request | `transport/http.rs` `spawn_disconnect_monitor` (`poll(POLLRDHUP)` on Linux), SSE keep-alive | H `subscription_stream_lifecycle`, `tls_disconnect_cancels_in_flight_request` |
+| Graceful server teardown of subscriptions on shutdown | `Core::begin_shutdown`, SIGTERM/SIGINT handler (`util/signal.rs`) | L `sigterm_drains_completes_subscriptions_and_persists_cache` |
 
 ## Server features
 
 | Requirement | Code | Test |
 | --- | --- | --- |
 | `server/discover` (MUST) with cache hints | `server::discover` | S |
+| JSON Schema `pattern` enforced | `util/regex.rs`, `schema::check` | U `regex`, S `negative_results…` |
 | Tools: deterministic order, pagination, `ttlMs`/`cacheScope` | `list_tools`, `paginate` | S `tools_list_is_deterministic_paginated_and_cacheable` |
 | Lists may vary by authorization but not by connection | `visible_tools(principal)` | S `partner_tools_and_scopes` |
 | Unknown tool → `-32602`; input validation errors → `isError` | `call_tool` | S `negative_results_and_validation_errors_are_tool_errors` |
@@ -45,7 +47,11 @@ This map links each normative requirement (from `mcp-2026-07-28/` and `mcp-ext-t
 | Resource not found → `-32602` with `data.uri`; never empty `contents` | `resources::read` | S `resources_read_list_and_templates` |
 | `resources/read` and list hints; `subscribe` and `listChanged` | `read_resource`, watcher `watch_tick` | S |
 | Prompts: missing argument → `-32602` (or MRTR) | `get_prompt` | S `prompts_embed_resources_and_elicit_missing_args` |
-| Completion: ≤100 values, `total`, `hasMore`; unknown ref → `-32602` | `completion.rs`, `server::complete` | S `completion_uses_partner_apps_and_catalog` |
+| Completion: ≤100 values, `total`, `hasMore`; unknown ref → `-32602`; `context.arguments` | `completion.rs`, `server::complete` | S `completion_uses_partner_apps_and_catalog` |
+| URL-mode elicitation (no `elicitationId` in 2026-07-28) | `partner::steamworks_handoff` | S `url_elicitation_hands_off_to_steamworks` |
+| Icons on implementation, tools, resources, templates and prompts | `protocol::scope_icon` | S `listings_carry_icons` |
+| `prompts/list_changed` when visibility changes | `prompts::visible`, `watch_tick` | S `config_reload_notifies_list_changes` |
+| `resources/read` MRTR (MAY) | not used: no read where user input changes the outcome | — |
 | Logging: only when `logLevel` is set; invalid level → `-32602` | `RequestContext::log`, `RequestMeta::parse` | S, U |
 | Invalid cursor → `-32602` | `paginate` | S `protocol_errors` |
 | Requests carrying MRTR inputs get no cache hints | MRTR interim results carry none | — |
@@ -69,7 +75,9 @@ This map links each normative requirement (from `mcp-2026-07-28/` and `mcp-ext-t
 | RFC 9728 metadata (root and path-inserted) with `authorization_servers` | `auth::metadata`, `route` | H `authorization_challenges_and_metadata` |
 | 401 with `WWW-Authenticate` `resource_metadata` (and `scope`) | `handle_post` | H |
 | 403 `insufficient_scope` with the required scope | `handle_post` | H |
-| Audience validation (RFC 8707); reject tokens issued for others | `auth::check_claims` | U `auth::jwt_hs256` |
+| Audience validation (RFC 8707); reject tokens issued for others | `auth::check_claims` | U `auth::jwt_hs256`, A |
+| RS256/ES256 through JWKS, with key rotation | `auth::find_jwk`, `verify_asymmetric` | A `rs256_tokens_validate_against_fetched_jwks` |
+| Token introspection (RFC 7662) | `auth::introspect` | A `introspection_with_client_credentials_and_caching` |
 | Never pass tokens upstream | Steam calls use only configured keys | — |
 | Scope hierarchy honoured | `context::scopes::implied` | U, H |
 
