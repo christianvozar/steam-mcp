@@ -41,7 +41,12 @@ pub struct McpError {
 
 impl McpError {
     pub fn new(code: i64, message: impl Into<String>) -> McpError {
-        McpError { code, message: message.into(), data: None, http_status: 200 }
+        McpError {
+            code,
+            message: message.into(),
+            data: None,
+            http_status: 200,
+        }
     }
     pub fn with_data(mut self, data: Value) -> McpError {
         self.data = Some(data);
@@ -59,7 +64,9 @@ impl McpError {
         McpError::new(INVALID_REQUEST, msg).http(400)
     }
     pub fn method_not_found(method: &str) -> McpError {
-        McpError::new(METHOD_NOT_FOUND, format!("Method not found: {method}")).with_data(obj! { "method" => method }).http(404)
+        McpError::new(METHOD_NOT_FOUND, format!("Method not found: {method}"))
+            .with_data(obj! { "method" => method })
+            .http(404)
     }
     pub fn invalid_params(msg: impl Into<String>) -> McpError {
         McpError::new(INVALID_PARAMS, msg)
@@ -69,19 +76,26 @@ impl McpError {
     }
     pub fn unsupported_version(requested: &str) -> McpError {
         McpError::new(UNSUPPORTED_PROTOCOL_VERSION, "Unsupported protocol version")
-            .with_data(obj! { "supported" => SUPPORTED_VERSIONS.to_vec(), "requested" => requested })
+            .with_data(
+                obj! { "supported" => SUPPORTED_VERSIONS.to_vec(), "requested" => requested },
+            )
             .http(400)
     }
     pub fn missing_capability(required: Value, why: &str) -> McpError {
-        McpError::new(MISSING_REQUIRED_CLIENT_CAPABILITY, format!("Missing required client capability: {why}"))
-            .with_data(obj! { "requiredCapabilities" => required })
-            .http(400)
+        McpError::new(
+            MISSING_REQUIRED_CLIENT_CAPABILITY,
+            format!("Missing required client capability: {why}"),
+        )
+        .with_data(obj! { "requiredCapabilities" => required })
+        .http(400)
     }
     pub fn header_mismatch(msg: impl Into<String>) -> McpError {
         McpError::new(HEADER_MISMATCH, format!("Header mismatch: {}", msg.into())).http(400)
     }
     pub fn rate_limited(retry_after_ms: u64) -> McpError {
-        McpError::new(RATE_LIMITED, "Rate limit exceeded").with_data(obj! { "retryAfterMs" => retry_after_ms }).http(429)
+        McpError::new(RATE_LIMITED, "Rate limit exceeded")
+            .with_data(obj! { "retryAfterMs" => retry_after_ms })
+            .http(429)
     }
 
     pub fn to_json(&self) -> Value {
@@ -163,38 +177,84 @@ impl RequestMeta {
         };
         let version = match meta.get(META_PROTOCOL_VERSION) {
             Some(Value::String(v)) => v.clone(),
-            Some(_) => return Err(McpError::invalid_params(format!("{META_PROTOCOL_VERSION} must be a string")).http(400)),
-            None => return Err(McpError::invalid_params(format!("Missing required _meta field {META_PROTOCOL_VERSION}")).http(400)),
+            Some(_) => {
+                return Err(McpError::invalid_params(format!(
+                    "{META_PROTOCOL_VERSION} must be a string"
+                ))
+                .http(400));
+            }
+            None => {
+                return Err(McpError::invalid_params(format!(
+                    "Missing required _meta field {META_PROTOCOL_VERSION}"
+                ))
+                .http(400));
+            }
         };
         if !SUPPORTED_VERSIONS.contains(&version.as_str()) {
             return Err(McpError::unsupported_version(&version));
         }
         let caps = match meta.get(META_CLIENT_CAPABILITIES) {
             Some(v @ Value::Object(_)) => v.clone(),
-            Some(_) => return Err(McpError::invalid_params(format!("{META_CLIENT_CAPABILITIES} must be an object")).http(400)),
-            None => return Err(McpError::invalid_params(format!("Missing required _meta field {META_CLIENT_CAPABILITIES}")).http(400)),
+            Some(_) => {
+                return Err(McpError::invalid_params(format!(
+                    "{META_CLIENT_CAPABILITIES} must be an object"
+                ))
+                .http(400));
+            }
+            None => {
+                return Err(McpError::invalid_params(format!(
+                    "Missing required _meta field {META_CLIENT_CAPABILITIES}"
+                ))
+                .http(400));
+            }
         };
         let client_info = match meta.get(META_CLIENT_INFO) {
             None | Some(Value::Null) => None,
             Some(v @ Value::Object(_)) => Some(v.clone()),
-            Some(_) => return Err(McpError::invalid_params(format!("{META_CLIENT_INFO} must be an Implementation object"))),
+            Some(_) => {
+                return Err(McpError::invalid_params(format!(
+                    "{META_CLIENT_INFO} must be an Implementation object"
+                )));
+            }
         };
         let log_level = match meta.get(META_LOG_LEVEL) {
             None | Some(Value::Null) => None,
-            Some(Value::String(s)) => Some(LogLevel::parse(s).ok_or_else(|| McpError::invalid_params(format!("Invalid log level: {s}")))?),
-            Some(_) => return Err(McpError::invalid_params("Invalid log level: must be a string")),
+            Some(Value::String(s)) => Some(
+                LogLevel::parse(s)
+                    .ok_or_else(|| McpError::invalid_params(format!("Invalid log level: {s}")))?,
+            ),
+            Some(_) => {
+                return Err(McpError::invalid_params(
+                    "Invalid log level: must be a string",
+                ));
+            }
         };
         let progress_token = match meta.get("progressToken") {
             None | Some(Value::Null) => None,
             Some(v @ Value::String(_)) => Some(v.clone()),
             Some(v @ Value::Number(n)) if n.is_integer() => Some(v.clone()),
-            Some(_) => return Err(McpError::invalid_params("progressToken must be a string or integer")),
+            Some(_) => {
+                return Err(McpError::invalid_params(
+                    "progressToken must be a string or integer",
+                ));
+            }
         };
-        Ok(RequestMeta { protocol_version: version, client_info, client_capabilities: caps, log_level, progress_token, raw: meta.clone() })
+        Ok(RequestMeta {
+            protocol_version: version,
+            client_info,
+            client_capabilities: caps,
+            log_level,
+            progress_token,
+            raw: meta.clone(),
+        })
     }
 
     pub fn client_name(&self) -> String {
-        self.client_info.as_ref().and_then(|c| c["name"].as_str()).unwrap_or("unknown").to_string()
+        self.client_info
+            .as_ref()
+            .and_then(|c| c["name"].as_str())
+            .unwrap_or("unknown")
+            .to_string()
     }
 }
 
@@ -285,7 +345,8 @@ mod tests {
         assert_eq!(m.log_level, Some(LogLevel::Info));
         assert_eq!(m.progress_token, Some(Value::from(7)));
 
-        let missing = parse(r#"{"_meta":{"io.modelcontextprotocol/clientCapabilities":{}}}"#).unwrap();
+        let missing =
+            parse(r#"{"_meta":{"io.modelcontextprotocol/clientCapabilities":{}}}"#).unwrap();
         let e = RequestMeta::parse(Some(&missing)).unwrap_err();
         assert_eq!((e.code, e.http_status), (INVALID_PARAMS, 400));
 
@@ -295,7 +356,10 @@ mod tests {
         assert_eq!(e.data.unwrap()["requested"].as_str(), Some("1900-01-01"));
 
         let bad_level = parse(r#"{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{},"io.modelcontextprotocol/logLevel":"loud"}}"#).unwrap();
-        assert_eq!(RequestMeta::parse(Some(&bad_level)).unwrap_err().code, INVALID_PARAMS);
+        assert_eq!(
+            RequestMeta::parse(Some(&bad_level)).unwrap_err().code,
+            INVALID_PARAMS
+        );
         assert!(RequestMeta::parse(None).is_err());
     }
 
@@ -303,7 +367,10 @@ mod tests {
     fn responses() {
         let r = result_response(&Value::from(1), obj! { "x" => 1 });
         assert_eq!(r["result"]["resultType"].as_str(), Some("complete"));
-        assert_eq!(r["result"]["_meta"][META_SERVER_INFO]["name"].as_str(), Some("steam-mcp"));
+        assert_eq!(
+            r["result"]["_meta"][META_SERVER_INFO]["name"].as_str(),
+            Some("steam-mcp")
+        );
         let e = error_response(None, &McpError::parse_error("bad"));
         assert!(e.get("id").is_none());
         assert!(valid_request_id(&Value::from("a")));

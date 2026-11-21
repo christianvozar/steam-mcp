@@ -59,14 +59,24 @@ pub struct Request {
 
 impl Request {
     pub fn get(url: impl Into<String>) -> Request {
-        Request { method: "GET".into(), url: url.into(), headers: Vec::new(), body: None, idempotent: true, timeout: None }
+        Request {
+            method: "GET".into(),
+            url: url.into(),
+            headers: Vec::new(),
+            body: None,
+            idempotent: true,
+            timeout: None,
+        }
     }
 
     pub fn post_form(url: impl Into<String>, form: String) -> Request {
         Request {
             method: "POST".into(),
             url: url.into(),
-            headers: vec![("Content-Type".into(), "application/x-www-form-urlencoded".into())],
+            headers: vec![(
+                "Content-Type".into(),
+                "application/x-www-form-urlencoded".into(),
+            )],
             body: Some(form.into_bytes()),
             idempotent: false,
             timeout: None,
@@ -141,12 +151,16 @@ pub struct HttpClient {
 }
 
 fn env_any(names: &[&str]) -> Option<String> {
-    names.iter().find_map(|n| std::env::var(n).ok().filter(|v| !v.trim().is_empty()))
+    names
+        .iter()
+        .find_map(|n| std::env::var(n).ok().filter(|v| !v.trim().is_empty()))
 }
 
 impl HttpClient {
     pub fn new(opts: ClientOptions) -> Result<HttpClient, HttpError> {
-        let mut roots = rustls::RootCertStore { roots: webpki_roots::TLS_SERVER_ROOTS.into() };
+        let mut roots = rustls::RootCertStore {
+            roots: webpki_roots::TLS_SERVER_ROOTS.into(),
+        };
         if let Some(path) = &opts.extra_ca_file {
             use rustls::pki_types::{CertificateDer, pem::PemObject};
             match CertificateDer::pem_file_iter(path) {
@@ -157,9 +171,16 @@ impl HttpClient {
                             added += 1;
                         }
                     }
-                    crate::log_debug!("http", "loaded extra trust anchors", path = path, count = added);
+                    crate::log_debug!(
+                        "http",
+                        "loaded extra trust anchors",
+                        path = path,
+                        count = added
+                    );
                 }
-                Err(e) => crate::log_warn!("http", "could not read CA file", path = path, error = e),
+                Err(e) => {
+                    crate::log_warn!("http", "could not read CA file", path = path, error = e)
+                }
             }
         }
         let provider = Arc::new(rustls::crypto::ring::default_provider());
@@ -172,21 +193,47 @@ impl HttpClient {
         let (https_proxy, http_proxy, no_proxy) = if opts.use_env_proxy {
             let parse = |v: Option<String>| {
                 v.and_then(|s| {
-                    let s = if s.contains("://") { s } else { format!("http://{s}") };
+                    let s = if s.contains("://") {
+                        s
+                    } else {
+                        format!("http://{s}")
+                    };
                     Url::parse(&s).map(|url| Proxy { url })
                 })
             };
             (
-                parse(env_any(&["HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"])),
-                parse(env_any(&["HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"])),
+                parse(env_any(&[
+                    "HTTPS_PROXY",
+                    "https_proxy",
+                    "ALL_PROXY",
+                    "all_proxy",
+                ])),
+                parse(env_any(&[
+                    "HTTP_PROXY",
+                    "http_proxy",
+                    "ALL_PROXY",
+                    "all_proxy",
+                ])),
                 env_any(&["NO_PROXY", "no_proxy"])
-                    .map(|v| v.split(',').map(|s| s.trim().to_ascii_lowercase()).filter(|s| !s.is_empty()).collect())
+                    .map(|v| {
+                        v.split(',')
+                            .map(|s| s.trim().to_ascii_lowercase())
+                            .filter(|s| !s.is_empty())
+                            .collect()
+                    })
                     .unwrap_or_default(),
             )
         } else {
             (None, None, Vec::new())
         };
-        Ok(HttpClient { tls: Arc::new(tls), pool: Mutex::new(HashMap::new()), opts, https_proxy, http_proxy, no_proxy })
+        Ok(HttpClient {
+            tls: Arc::new(tls),
+            pool: Mutex::new(HashMap::new()),
+            opts,
+            https_proxy,
+            http_proxy,
+            no_proxy,
+        })
     }
 
     fn bypass_proxy(&self, host: &str) -> bool {
@@ -207,11 +254,22 @@ impl HttpClient {
         if self.bypass_proxy(&url.host) {
             return None;
         }
-        if url.is_https() { self.https_proxy.as_ref() } else { self.http_proxy.as_ref() }
+        if url.is_https() {
+            self.https_proxy.as_ref()
+        } else {
+            self.http_proxy.as_ref()
+        }
     }
 
-    fn tcp_connect(&self, host: &str, port: u16, timeout: Duration) -> Result<TcpStream, HttpError> {
-        let addrs = (host, port).to_socket_addrs().map_err(|e| HttpError::Connect(format!("{host}: {e}")))?;
+    fn tcp_connect(
+        &self,
+        host: &str,
+        port: u16,
+        timeout: Duration,
+    ) -> Result<TcpStream, HttpError> {
+        let addrs = (host, port)
+            .to_socket_addrs()
+            .map_err(|e| HttpError::Connect(format!("{host}: {e}")))?;
         let mut last = None;
         for addr in addrs {
             match TcpStream::connect_timeout(&addr, self.opts.connect_timeout) {
@@ -226,7 +284,8 @@ impl HttpClient {
         }
         Err(HttpError::Connect(format!(
             "{host}:{port}: {}",
-            last.map(|e| e.to_string()).unwrap_or_else(|| "no addresses".into())
+            last.map(|e| e.to_string())
+                .unwrap_or_else(|| "no addresses".into())
         )))
     }
 
@@ -250,29 +309,62 @@ impl HttpClient {
         let mut tls = rustls::StreamOwned::new(conn, tcp);
         // Complete the handshake eagerly so TLS failures surface as such.
         while tls.conn.is_handshaking() {
-            tls.conn.complete_io(&mut tls.sock).map_err(|e| HttpError::Tls(e.to_string()))?;
+            tls.conn
+                .complete_io(&mut tls.sock)
+                .map_err(|e| HttpError::Tls(e.to_string()))?;
         }
         Ok(Stream::ClientTls(Box::new(tls)))
     }
 
-    fn connect_tunnel(&self, mut tcp: TcpStream, proxy: &Proxy, url: &Url) -> Result<TcpStream, HttpError> {
-        let target = format!("{}:{}", if url.host.contains(':') { format!("[{}]", url.host) } else { url.host.clone() }, url.port);
-        let mut req = format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\nUser-Agent: {}\r\n", self.opts.user_agent);
+    fn connect_tunnel(
+        &self,
+        mut tcp: TcpStream,
+        proxy: &Proxy,
+        url: &Url,
+    ) -> Result<TcpStream, HttpError> {
+        let target = format!(
+            "{}:{}",
+            if url.host.contains(':') {
+                format!("[{}]", url.host)
+            } else {
+                url.host.clone()
+            },
+            url.port
+        );
+        let mut req = format!(
+            "CONNECT {target} HTTP/1.1\r\nHost: {target}\r\nUser-Agent: {}\r\n",
+            self.opts.user_agent
+        );
         if let Some(ui) = &proxy.url.userinfo {
             let decoded = crate::util::encoding::pct_decode(ui, false);
-            req.push_str(&format!("Proxy-Authorization: Basic {}\r\n", b64_encode(decoded.as_bytes())));
+            req.push_str(&format!(
+                "Proxy-Authorization: Basic {}\r\n",
+                b64_encode(decoded.as_bytes())
+            ));
         }
         req.push_str("\r\n");
         tcp.write_all(req.as_bytes())?;
         let mut reader = BufReader::new(tcp);
         let (status_line, headers) = read_head(&mut reader, 64 * 1024)?
             .ok_or_else(|| HttpError::Proxy("proxy closed connection".into()))?;
-        let status: u16 = status_line.split_whitespace().nth(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+        let status: u16 = status_line
+            .split_whitespace()
+            .nth(1)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
         if status != 200 {
-            return Err(HttpError::Proxy(format!("CONNECT {target} returned {status_line}")));
+            return Err(HttpError::Proxy(format!(
+                "CONNECT {target} returned {status_line}"
+            )));
         }
-        if !matches!(framing(&headers, true), Ok(Framing::None) | Ok(Framing::UntilClose)) || !reader.buffer().is_empty() {
-            return Err(HttpError::Proxy("unexpected data after CONNECT response".into()));
+        if !matches!(
+            framing(&headers, true),
+            Ok(Framing::None) | Ok(Framing::UntilClose)
+        ) || !reader.buffer().is_empty()
+        {
+            return Err(HttpError::Proxy(
+                "unexpected data after CONNECT response".into(),
+            ));
         }
         Ok(reader.into_inner())
     }
@@ -307,8 +399,16 @@ impl HttpClient {
         let key = Self::pool_key(&url);
         let timeout = req.timeout.unwrap_or(self.opts.io_timeout);
         if let Some(mut conn) = self.checkout(&key) {
-            conn.reader.get_ref().tcp().set_read_timeout(Some(timeout)).ok();
-            conn.reader.get_ref().tcp().set_write_timeout(Some(timeout)).ok();
+            conn.reader
+                .get_ref()
+                .tcp()
+                .set_read_timeout(Some(timeout))
+                .ok();
+            conn.reader
+                .get_ref()
+                .tcp()
+                .set_write_timeout(Some(timeout))
+                .ok();
             match self.exchange(&mut conn, &url, req) {
                 Ok((resp, reusable)) => {
                     if reusable {
@@ -325,7 +425,10 @@ impl HttpClient {
             }
         }
         let stream = self.connect(&url, timeout)?;
-        let mut conn = Conn { reader: BufReader::with_capacity(64 * 1024, stream), idle_since: Instant::now() };
+        let mut conn = Conn {
+            reader: BufReader::with_capacity(64 * 1024, stream),
+            idle_since: Instant::now(),
+        };
         match self.exchange(&mut conn, &url, req) {
             Ok((resp, reusable)) => {
                 if reusable {
@@ -339,10 +442,24 @@ impl HttpClient {
 
     /// Performs one request/response exchange. On error, the boolean says
     /// whether no part of the response was received (safe to retry).
-    fn exchange(&self, conn: &mut Conn, url: &Url, req: &Request) -> Result<(Response, bool), (HttpError, bool)> {
+    fn exchange(
+        &self,
+        conn: &mut Conn,
+        url: &Url,
+        req: &Request,
+    ) -> Result<(Response, bool), (HttpError, bool)> {
         let via_http_proxy = !url.is_https() && self.proxy_for(url).is_some();
-        let target = if via_http_proxy { format!("{}{}", url.origin(), url.path_and_query) } else { url.path_and_query.clone() };
-        let mut head = format!("{} {} HTTP/1.1\r\nHost: {}\r\n", req.method, target, url.host_header());
+        let target = if via_http_proxy {
+            format!("{}{}", url.origin(), url.path_and_query)
+        } else {
+            url.path_and_query.clone()
+        };
+        let mut head = format!(
+            "{} {} HTTP/1.1\r\nHost: {}\r\n",
+            req.method,
+            target,
+            url.host_header()
+        );
         let has = |n: &str| req.headers.iter().any(|(k, _)| k.eq_ignore_ascii_case(n));
         if !has("user-agent") {
             head.push_str(&format!("User-Agent: {}\r\n", self.opts.user_agent));
@@ -356,12 +473,18 @@ impl HttpClient {
         if via_http_proxy {
             if let Some(ui) = self.proxy_for(url).and_then(|p| p.url.userinfo.clone()) {
                 let decoded = crate::util::encoding::pct_decode(&ui, false);
-                head.push_str(&format!("Proxy-Authorization: Basic {}\r\n", b64_encode(decoded.as_bytes())));
+                head.push_str(&format!(
+                    "Proxy-Authorization: Basic {}\r\n",
+                    b64_encode(decoded.as_bytes())
+                ));
             }
         }
         for (k, v) in &req.headers {
             if k.contains(['\r', '\n']) || v.contains(['\r', '\n']) {
-                return Err((HttpError::Protocol("header injection attempt".into()), false));
+                return Err((
+                    HttpError::Protocol("header injection attempt".into()),
+                    false,
+                ));
             }
             head.push_str(&format!("{k}: {v}\r\n"));
         }
@@ -371,24 +494,41 @@ impl HttpClient {
         }
         head.push_str("Connection: keep-alive\r\n\r\n");
         let w = conn.reader.get_mut();
-        if let Err(e) = w.write_all(head.as_bytes()).and_then(|_| w.write_all(body)).and_then(|_| w.flush()) {
+        if let Err(e) = w
+            .write_all(head.as_bytes())
+            .and_then(|_| w.write_all(body))
+            .and_then(|_| w.flush())
+        {
             return Err((HttpError::Io(e), true));
         }
         // Read the response head, skipping interim 1xx responses.
         let (status, headers) = loop {
             let (status_line, headers) = match read_head(&mut conn.reader, 64 * 1024) {
                 Ok(Some(h)) => h,
-                Ok(None) => return Err((HttpError::Protocol("connection closed before response".into()), true)),
+                Ok(None) => {
+                    return Err((
+                        HttpError::Protocol("connection closed before response".into()),
+                        true,
+                    ));
+                }
                 Err(e) => return Err((HttpError::Io(e), false)),
             };
             let mut parts = status_line.splitn(3, ' ');
             let version = parts.next().unwrap_or("");
             if !version.starts_with("HTTP/1.") {
-                return Err((HttpError::Protocol(format!("unexpected status line: {status_line}")), false));
+                return Err((
+                    HttpError::Protocol(format!("unexpected status line: {status_line}")),
+                    false,
+                ));
             }
             let status: u16 = match parts.next().and_then(|s| s.parse().ok()) {
                 Some(s) => s,
-                None => return Err((HttpError::Protocol(format!("bad status: {status_line}")), false)),
+                None => {
+                    return Err((
+                        HttpError::Protocol(format!("bad status: {status_line}")),
+                        false,
+                    ));
+                }
             };
             if (100..200).contains(&status) && status != 101 {
                 continue;
@@ -400,11 +540,19 @@ impl HttpClient {
         } else {
             framing(&headers, true).map_err(|e| (HttpError::Io(e), false))?
         };
-        let body = read_body(&mut conn.reader, &fr, self.opts.max_body).map_err(|e| (HttpError::Io(e), false))?;
+        let body = read_body(&mut conn.reader, &fr, self.opts.max_body)
+            .map_err(|e| (HttpError::Io(e), false))?;
         let reusable = fr != Framing::UntilClose
             && !headers.has_token("connection", "close")
             && conn.reader.buffer().is_empty();
-        Ok((Response { status, headers, body }, reusable))
+        Ok((
+            Response {
+                status,
+                headers,
+                body,
+            },
+            reusable,
+        ))
     }
 }
 
@@ -435,17 +583,26 @@ mod tests {
                 if i == 0 {
                     w.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n0\r\n\r\n").unwrap();
                 } else {
-                    w.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 2\r\n\r\nno").unwrap();
+                    w.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 2\r\n\r\nno")
+                        .unwrap();
                 }
             }
             let mut rest = Vec::new();
             let _ = r.read_to_end(&mut rest);
         });
-        let client = HttpClient::new(ClientOptions { use_env_proxy: false, ..Default::default() }).unwrap();
-        let r1 = client.send(&Request::get(format!("http://{addr}/a"))).unwrap();
+        let client = HttpClient::new(ClientOptions {
+            use_env_proxy: false,
+            ..Default::default()
+        })
+        .unwrap();
+        let r1 = client
+            .send(&Request::get(format!("http://{addr}/a")))
+            .unwrap();
         assert_eq!(r1.status, 200);
         assert_eq!(r1.body, b"abc");
-        let r2 = client.send(&Request::get(format!("http://{addr}/b"))).unwrap();
+        let r2 = client
+            .send(&Request::get(format!("http://{addr}/b")))
+            .unwrap();
         assert_eq!(r2.status, 404);
         assert_eq!(r2.text(), "no");
     }

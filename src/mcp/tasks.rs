@@ -103,9 +103,18 @@ impl TaskHandle {
         }
         if detailed {
             match s.status {
-                Status::InputRequired => t.set("inputRequests", Value::Object(s.input_requests.clone())),
-                Status::Completed => t.set("result", s.result.clone().unwrap_or_else(Value::object)),
-                Status::Failed => t.set("error", s.error.clone().unwrap_or_else(|| obj! { "code" => -32603, "message" => "Task failed" })),
+                Status::InputRequired => {
+                    t.set("inputRequests", Value::Object(s.input_requests.clone()))
+                }
+                Status::Completed => {
+                    t.set("result", s.result.clone().unwrap_or_else(Value::object))
+                }
+                Status::Failed => t.set(
+                    "error",
+                    s.error
+                        .clone()
+                        .unwrap_or_else(|| obj! { "code" => -32603, "message" => "Task failed" }),
+                ),
                 _ => {}
             }
         }
@@ -162,7 +171,10 @@ impl TaskHandle {
                 }
                 return None;
             }
-            let (g, _) = self.cv.wait_timeout(s, (deadline - now).min(Duration::from_millis(500))).unwrap_or_else(|e| e.into_inner());
+            let (g, _) = self
+                .cv
+                .wait_timeout(s, (deadline - now).min(Duration::from_millis(500)))
+                .unwrap_or_else(|e| e.into_inner());
             s = g;
         }
     }
@@ -237,7 +249,10 @@ impl TaskHandle {
             if s.status == Status::InputRequired {
                 return false;
             }
-            let (g, _) = self.cv.wait_timeout(s, deadline - now).unwrap_or_else(|e| e.into_inner());
+            let (g, _) = self
+                .cv
+                .wait_timeout(s, deadline - now)
+                .unwrap_or_else(|e| e.into_inner());
             s = g;
         }
         true
@@ -266,7 +281,10 @@ impl Default for TaskStore {
 
 impl TaskStore {
     pub fn new() -> TaskStore {
-        TaskStore { tasks: Mutex::new(HashMap::new()), notifier: Mutex::new(None) }
+        TaskStore {
+            tasks: Mutex::new(HashMap::new()),
+            notifier: Mutex::new(None),
+        }
     }
 
     pub fn set_notifier(&self, n: Notifier) {
@@ -275,7 +293,12 @@ impl TaskStore {
 
     /// Creates (and registers) a task before it is returned to the client.
     pub fn create(&self, owner: &str, ttl: Duration, poll: Duration) -> Arc<TaskHandle> {
-        let notifier = self.notifier.lock().unwrap_or_else(|e| e.into_inner()).clone().unwrap_or_else(|| Arc::new(|_: &str, _: &str, _: Value| {}));
+        let notifier = self
+            .notifier
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .unwrap_or_else(|| Arc::new(|_: &str, _: &str, _: Value| {}));
         let now = now_ms();
         let t = Arc::new(TaskHandle {
             id: format!("task_{}", random_id(16)),
@@ -283,7 +306,16 @@ impl TaskStore {
             created_ms: now,
             ttl_ms: ttl.as_millis() as u64,
             poll_interval_ms: poll.as_millis() as u64,
-            state: Mutex::new(State { status: Status::Working, status_message: Some("Started".into()), updated_ms: now, result: None, error: None, input_requests: Map::new(), input_responses: Map::new(), issued: HashSet::new() }),
+            state: Mutex::new(State {
+                status: Status::Working,
+                status_message: Some("Started".into()),
+                updated_ms: now,
+                result: None,
+                error: None,
+                input_requests: Map::new(),
+                input_responses: Map::new(),
+                issued: HashSet::new(),
+            }),
             cv: Condvar::new(),
             cancel: CancelToken::new(),
             notifier,
@@ -298,7 +330,9 @@ impl TaskStore {
     pub fn get(&self, id: &str, owner: &str) -> Option<Arc<TaskHandle>> {
         let now = now_ms();
         let map = self.tasks.lock().unwrap_or_else(|e| e.into_inner());
-        map.get(id).filter(|t| t.owner == owner && !t.expired(now)).cloned()
+        map.get(id)
+            .filter(|t| t.owner == owner && !t.expired(now))
+            .cloned()
     }
 
     pub fn purge(&self) -> usize {
@@ -334,12 +368,20 @@ mod tests {
         let store = TaskStore::new();
         let events = Arc::new(Mutex::new(Vec::new()));
         let ev = events.clone();
-        store.set_notifier(Arc::new(move |_id: &str, _o: &str, v: Value| ev.lock().unwrap().push(v["status"].as_str().unwrap().to_string())));
+        store.set_notifier(Arc::new(move |_id: &str, _o: &str, v: Value| {
+            ev.lock()
+                .unwrap()
+                .push(v["status"].as_str().unwrap().to_string())
+        }));
         let t = store.create("alice", Duration::from_secs(60), Duration::from_millis(500));
         assert!(store.get(&t.id, "bob").is_none());
         let t2 = store.get(&t.id, "alice").unwrap();
         let worker = std::thread::spawn(move || {
-            let answer = t2.request_input("confirm_1", obj! { "method" => "elicitation/create" }, Duration::from_secs(5));
+            let answer = t2.request_input(
+                "confirm_1",
+                obj! { "method" => "elicitation/create" },
+                Duration::from_secs(5),
+            );
             t2.complete(obj! { "answer" => answer.unwrap_or_default() });
         });
         while t.status() != Status::InputRequired {
@@ -357,7 +399,10 @@ mod tests {
         assert_eq!(j["result"]["answer"]["action"].as_str(), Some("accept"));
         t.request_cancel(); // terminal: no change
         assert_eq!(t.status(), Status::Completed);
-        assert_eq!(*events.lock().unwrap(), vec!["input_required", "working", "completed"]);
+        assert_eq!(
+            *events.lock().unwrap(),
+            vec!["input_required", "working", "completed"]
+        );
     }
 
     #[test]

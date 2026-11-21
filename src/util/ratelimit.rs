@@ -24,7 +24,10 @@ impl TokenBucket {
         TokenBucket {
             rate: rate.max(0.001),
             burst,
-            state: Mutex::new(Bucket { tokens: burst, last: Instant::now() }),
+            state: Mutex::new(Bucket {
+                tokens: burst,
+                last: Instant::now(),
+            }),
         }
     }
 
@@ -74,7 +77,11 @@ pub struct KeyedLimiter {
 
 impl KeyedLimiter {
     pub fn new(rate: f64, burst: f64) -> Self {
-        KeyedLimiter { rate: rate.max(0.001), burst: burst.max(1.0), buckets: Mutex::new(HashMap::new()) }
+        KeyedLimiter {
+            rate: rate.max(0.001),
+            burst: burst.max(1.0),
+            buckets: Mutex::new(HashMap::new()),
+        }
     }
 
     pub fn check(&self, key: &str) -> Result<(), Duration> {
@@ -83,9 +90,15 @@ impl KeyedLimiter {
         if map.len() > 10_000 {
             map.retain(|_, (_, seen)| now.duration_since(*seen) < Duration::from_secs(600));
         }
-        let (b, seen) = map
-            .entry(key.to_string())
-            .or_insert_with(|| (Bucket { tokens: self.burst, last: now }, now));
+        let (b, seen) = map.entry(key.to_string()).or_insert_with(|| {
+            (
+                Bucket {
+                    tokens: self.burst,
+                    last: now,
+                },
+                now,
+            )
+        });
         *seen = now;
         let elapsed = now.duration_since(b.last).as_secs_f64();
         b.tokens = (b.tokens + elapsed * self.rate).min(self.burst);

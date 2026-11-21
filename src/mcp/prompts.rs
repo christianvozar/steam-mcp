@@ -31,8 +31,18 @@ pub struct PromptDef {
     pub brief: &'static str,
 }
 
-const fn arg(name: &'static str, title: &'static str, description: &'static str, required: bool) -> PromptArg {
-    PromptArg { name, title, description, required }
+const fn arg(
+    name: &'static str,
+    title: &'static str,
+    description: &'static str,
+    required: bool,
+) -> PromptArg {
+    PromptArg {
+        name,
+        title,
+        description,
+        required,
+    }
 }
 
 pub fn prompts() -> Vec<PromptDef> {
@@ -51,7 +61,15 @@ pub fn prompts() -> Vec<PromptDef> {
             name: "review_sentiment_analysis",
             title: "Review Sentiment Analysis",
             description: "Analyze recent player reviews for themes, praise, complaints and emerging issues.",
-            args: vec![arg("appid", "App ID", "Steam app ID", true), arg("focus", "Focus", "Optional aspect to focus on (e.g. performance, monetization)", false)],
+            args: vec![
+                arg("appid", "App ID", "Steam app ID", true),
+                arg(
+                    "focus",
+                    "Focus",
+                    "Optional aspect to focus on (e.g. performance, monetization)",
+                    false,
+                ),
+            ],
             scope: scopes::PUBLIC,
             key: KeyKind::None,
             embeds: &["steam://app/{appid}/reviews"],
@@ -61,7 +79,12 @@ pub fn prompts() -> Vec<PromptDef> {
             name: "player_profile_report",
             title: "Player Profile Report",
             description: "Summarize a Steam player's profile, activity and account standing.",
-            args: vec![arg("steamid", "SteamID", "64-bit SteamID of the player", true)],
+            args: vec![arg(
+                "steamid",
+                "SteamID",
+                "64-bit SteamID of the player",
+                true,
+            )],
             scope: scopes::PUBLIC,
             key: KeyKind::Public,
             embeds: &["steam://player/{steamid}/profile"],
@@ -91,7 +114,15 @@ pub fn prompts() -> Vec<PromptDef> {
             name: "competitor_comparison",
             title: "Competitor Comparison",
             description: "Compare an app with competitors on price, players, reviews and content.",
-            args: vec![arg("appid", "App ID", "Your app ID", true), arg("competitors", "Competitors", "Comma-separated competitor app IDs", true)],
+            args: vec![
+                arg("appid", "App ID", "Your app ID", true),
+                arg(
+                    "competitors",
+                    "Competitors",
+                    "Comma-separated competitor app IDs",
+                    true,
+                ),
+            ],
             scope: scopes::PUBLIC,
             key: KeyKind::None,
             embeds: &["steam://app/{appid}/overview"],
@@ -104,14 +135,22 @@ pub fn prompts() -> Vec<PromptDef> {
             args: vec![arg("appid", "App ID", "Your app ID", true)],
             scope: scopes::PARTNER,
             key: KeyKind::Publisher,
-            embeds: &["steam://partner/app/{appid}/betas", "steam://partner/app/{appid}/builds"],
+            embeds: &[
+                "steam://partner/app/{appid}/betas",
+                "steam://partner/app/{appid}/builds",
+            ],
             brief: "Using the embedded branches and builds for app {appid}, report which build is live on each branch, how far each branch is behind the newest build, any password-protected branches, and anything that looks risky before a release (e.g. public running an old build, undescribed builds). Do not change anything.",
         },
         PromptDef {
             name: "partner_sales_report",
             title: "Daily Sales Report",
             description: "Financial: summarize a day of Steam sales.",
-            args: vec![arg("date", "Date", "Date from steam_partner_get_changed_sales_dates", true)],
+            args: vec![arg(
+                "date",
+                "Date",
+                "Date from steam_partner_get_changed_sales_dates",
+                true,
+            )],
             scope: scopes::FINANCIAL,
             key: KeyKind::Financial,
             embeds: &["steam://partner/sales/{date}"],
@@ -122,7 +161,9 @@ pub fn prompts() -> Vec<PromptDef> {
 
 /// Visible prompts for a caller.
 pub fn visible<'a>(core: &Core, ctx: &RequestContext, defs: &'a [PromptDef]) -> Vec<&'a PromptDef> {
-    defs.iter().filter(|p| ctx.principal.has_scope(p.scope) && core.steam.has_key(p.key)).collect()
+    defs.iter()
+        .filter(|p| ctx.principal.has_scope(p.scope) && core.steam.has_key(p.key))
+        .collect()
 }
 
 pub fn to_json(p: &PromptDef) -> Value {
@@ -140,7 +181,11 @@ fn fill(template: &str, args: &BTreeMap<String, String>) -> String {
     let mut rest = out.as_str();
     while let Some(start) = rest.find('{') {
         match rest[start..].find('}') {
-            Some(end) if rest[start + 1..start + end].chars().all(|c| c.is_ascii_alphanumeric() || c == '_') => {
+            Some(end)
+                if rest[start + 1..start + end]
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_') =>
+            {
                 cleaned.push_str(&rest[..start]);
                 cleaned.push_str("the most important issues");
                 rest = &rest[start + end + 1..];
@@ -163,17 +208,32 @@ pub enum PromptOutcome {
 }
 
 /// Builds the `GetPromptResult`.
-pub fn get(core: &Arc<Core>, ctx: &RequestContext, p: &PromptDef, args: &BTreeMap<String, String>) -> Result<PromptOutcome, McpError> {
-    let missing: Vec<&'static str> = p.args.iter().filter(|a| a.required && args.get(a.name).is_none_or(|v| v.trim().is_empty())).map(|a| a.name).collect();
+pub fn get(
+    core: &Arc<Core>,
+    ctx: &RequestContext,
+    p: &PromptDef,
+    args: &BTreeMap<String, String>,
+) -> Result<PromptOutcome, McpError> {
+    let missing: Vec<&'static str> = p
+        .args
+        .iter()
+        .filter(|a| a.required && args.get(a.name).is_none_or(|v| v.trim().is_empty()))
+        .map(|a| a.name)
+        .collect();
     if !missing.is_empty() {
         return Ok(PromptOutcome::NeedArgs(missing));
     }
     for (k, v) in args {
         if !p.args.iter().any(|a| a.name == k) {
-            return Err(McpError::invalid_params(format!("Unknown argument '{k}' for prompt {}", p.name)));
+            return Err(McpError::invalid_params(format!(
+                "Unknown argument '{k}' for prompt {}",
+                p.name
+            )));
         }
         if v.len() > 2000 {
-            return Err(McpError::invalid_params(format!("Argument '{k}' is too long")));
+            return Err(McpError::invalid_params(format!(
+                "Argument '{k}' is too long"
+            )));
         }
     }
     if let Some(a) = args.get("appid") {
@@ -201,7 +261,9 @@ pub fn get(core: &Arc<Core>, ctx: &RequestContext, p: &PromptDef, args: &BTreeMa
         }
     }
     messages.push(obj! { "role" => "user", "content" => obj! { "type" => "text", "text" => fill(p.brief, args) } });
-    Ok(PromptOutcome::Done(obj! { "description" => format!("{} — {}", p.title, p.description), "messages" => messages }))
+    Ok(PromptOutcome::Done(
+        obj! { "description" => format!("{} — {}", p.title, p.description), "messages" => messages },
+    ))
 }
 
 /// Elicitation request asking for missing prompt arguments.
@@ -230,13 +292,29 @@ mod tests {
 
     #[test]
     fn filling() {
-        let args: BTreeMap<String, String> = [("appid".to_string(), "570".to_string())].into_iter().collect();
-        assert_eq!(fill("steam://app/{appid}/overview", &args), "steam://app/570/overview");
-        assert_eq!(fill("focus on {focus}.", &args), "focus on the most important issues.");
+        let args: BTreeMap<String, String> = [("appid".to_string(), "570".to_string())]
+            .into_iter()
+            .collect();
+        assert_eq!(
+            fill("steam://app/{appid}/overview", &args),
+            "steam://app/570/overview"
+        );
+        assert_eq!(
+            fill("focus on {focus}.", &args),
+            "focus on the most important issues."
+        );
         assert_eq!(fill("json {\"a\": 1}", &args), "json {\"a\": 1}");
         for p in prompts() {
             for e in p.embeds {
-                assert!(super::super::resources::resolve(&e.replace("{appid}", "1").replace("{steamid}", "76561197960287930").replace("{date}", "2026-01-01")).is_some(), "{e}");
+                assert!(
+                    super::super::resources::resolve(
+                        &e.replace("{appid}", "1")
+                            .replace("{steamid}", "76561197960287930")
+                            .replace("{date}", "2026-01-01")
+                    )
+                    .is_some(),
+                    "{e}"
+                );
             }
         }
     }

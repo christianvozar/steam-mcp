@@ -49,7 +49,12 @@ impl Policy {
     }
 
     /// A policy that never stores results (one-shot verifications).
-    pub const NONE: Policy = Policy { ttl: Duration::ZERO, stale: Duration::ZERO, negative_ttl: Duration::ZERO, store: false };
+    pub const NONE: Policy = Policy {
+        ttl: Duration::ZERO,
+        stale: Duration::ZERO,
+        negative_ttl: Duration::ZERO,
+        store: false,
+    };
 
     pub fn is_none(&self) -> bool {
         !self.store
@@ -256,7 +261,11 @@ impl Cache {
         if now > entry.fetched_at_ms + entry.ttl_ms + entry.stale_ms.max(horizon) {
             return None;
         }
-        let source = if now < entry.fetched_at_ms + entry.ttl_ms { Source::Hit } else { Source::Stale };
+        let source = if now < entry.fetched_at_ms + entry.ttl_ms {
+            Source::Hit
+        } else {
+            Source::Stale
+        };
         let l = entry.lookup(source);
         Self::touch(&mut inner, key);
         Some(l)
@@ -276,13 +285,21 @@ impl Cache {
     pub fn put(&self, key: &str, value: Value, policy: &Policy, negative: bool) -> Lookup {
         let hash: Arc<str> = sha256_hex(value.to_string().as_bytes()).into();
         let size = value.approx_size() + key.len() + 128;
-        let ttl = if negative { policy.negative_ttl } else { policy.ttl };
+        let ttl = if negative {
+            policy.negative_ttl
+        } else {
+            policy.ttl
+        };
         let entry = Entry {
             value: Arc::new(value),
             hash,
             fetched_at_ms: now_ms(),
             ttl_ms: ttl.as_millis() as u64,
-            stale_ms: if negative { 0 } else { policy.stale.as_millis() as u64 },
+            stale_ms: if negative {
+                0
+            } else {
+                policy.stale.as_millis() as u64
+            },
             negative,
             size,
             tick: 0,
@@ -305,7 +322,9 @@ impl Cache {
         inner.map.insert(key, entry);
         // Evict least-recently-used entries over budget.
         while inner.bytes > self.config.max_bytes || inner.map.len() > self.config.max_entries {
-            let Some((&tick, _)) = inner.lru.iter().next() else { break };
+            let Some((&tick, _)) = inner.lru.iter().next() else {
+                break;
+            };
             let k = inner.lru.remove(&tick).unwrap_or_default();
             if let Some(e) = inner.map.remove(&k) {
                 inner.bytes = inner.bytes.saturating_sub(e.size);
@@ -316,12 +335,25 @@ impl Cache {
     }
 
     /// Returns the cached value or fetches it, applying the full policy.
-    pub fn get_or_fetch(self: &Arc<Self>, key: &str, policy: &Policy, force_refresh: bool, fetch: FetchFn) -> Result<Lookup, FetchError> {
+    pub fn get_or_fetch(
+        self: &Arc<Self>,
+        key: &str,
+        policy: &Policy,
+        force_refresh: bool,
+        fetch: FetchFn,
+    ) -> Result<Lookup, FetchError> {
         if policy.is_none() {
             return match fetch()? {
                 Fetched::Value(v) | Fetched::Negative(v) => {
                     let hash: Arc<str> = sha256_hex(v.to_string().as_bytes()).into();
-                    Ok(Lookup { value: Arc::new(v), source: Source::Bypass, fetched_at_ms: now_ms(), ttl_ms: 0, negative: false, hash })
+                    Ok(Lookup {
+                        value: Arc::new(v),
+                        source: Source::Bypass,
+                        fetched_at_ms: now_ms(),
+                        ttl_ms: 0,
+                        negative: false,
+                        hash,
+                    })
                 }
             };
         }
@@ -361,23 +393,37 @@ impl Cache {
         }
         let cache = self.clone();
         let key = key.to_string();
-        let spawned = std::thread::Builder::new().name("cache-refresh".into()).spawn(move || {
-            cache.stats.refreshes.fetch_add(1, Ordering::Relaxed);
-            let _ = cache.fetch_coalesced(&key, &policy, fetch);
-            cache.refreshing.lock().unwrap_or_else(|e| e.into_inner()).remove(&key);
-        });
+        let spawned = std::thread::Builder::new()
+            .name("cache-refresh".into())
+            .spawn(move || {
+                cache.stats.refreshes.fetch_add(1, Ordering::Relaxed);
+                let _ = cache.fetch_coalesced(&key, &policy, fetch);
+                cache
+                    .refreshing
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .remove(&key);
+            });
         if spawned.is_err() {
             crate::log_warn!("cache", "could not spawn refresh thread");
         }
     }
 
-    fn fetch_coalesced(self: &Arc<Self>, key: &str, policy: &Policy, fetch: FetchFn) -> Result<Lookup, FetchError> {
+    fn fetch_coalesced(
+        self: &Arc<Self>,
+        key: &str,
+        policy: &Policy,
+        fetch: FetchFn,
+    ) -> Result<Lookup, FetchError> {
         let (flight, leader) = {
             let mut inflight = self.inflight.lock().unwrap_or_else(|e| e.into_inner());
             match inflight.get(key) {
                 Some(f) => (f.clone(), false),
                 None => {
-                    let f = Arc::new(Flight { result: Mutex::new(None), cv: Condvar::new() });
+                    let f = Arc::new(Flight {
+                        result: Mutex::new(None),
+                        cv: Condvar::new(),
+                    });
                     inflight.insert(key.to_string(), f.clone());
                     (f, true)
                 }
@@ -393,19 +439,41 @@ impl Cache {
                     .unwrap_or_else(|e| e.into_inner());
                 guard = g;
                 if timeout.timed_out() && guard.is_none() {
-                    return Err(FetchError { message: "timed out waiting for in-flight fetch".into(), status: None, transient: true });
+                    return Err(FetchError {
+                        message: "timed out waiting for in-flight fetch".into(),
+                        status: None,
+                        transient: true,
+                    });
                 }
             }
-            return guard.clone().unwrap_or_else(|| Err(FetchError { message: "fetch abandoned".into(), status: None, transient: true }))
+            return guard
+                .clone()
+                .unwrap_or_else(|| {
+                    Err(FetchError {
+                        message: "fetch abandoned".into(),
+                        status: None,
+                        transient: true,
+                    })
+                })
                 .map(|mut l| {
-                    l.source = if l.source == Source::StaleOnError { Source::StaleOnError } else { Source::Coalesced };
+                    l.source = if l.source == Source::StaleOnError {
+                        Source::StaleOnError
+                    } else {
+                        Source::Coalesced
+                    };
                     l
                 });
         }
         self.stats.misses.fetch_add(1, Ordering::Relaxed);
         // Run the fetch outside of every lock; catch panics so waiters are released.
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| fetch()))
-            .unwrap_or_else(|_| Err(FetchError { message: "fetcher panicked".into(), status: None, transient: true }));
+            .unwrap_or_else(|_| {
+                Err(FetchError {
+                    message: "fetcher panicked".into(),
+                    status: None,
+                    transient: true,
+                })
+            });
         let result = match outcome {
             Ok(Fetched::Value(v)) => Ok(self.put(key, v, policy, false)),
             Ok(Fetched::Negative(v)) => Ok(self.put(key, v, policy, true)),
@@ -415,9 +483,17 @@ impl Cache {
                 let horizon = self.config.max_stale_on_error.as_millis() as u64;
                 let inner = self.lock();
                 match inner.map.get(key) {
-                    Some(entry) if !entry.negative && now_ms() < entry.fetched_at_ms + entry.ttl_ms + horizon => {
+                    Some(entry)
+                        if !entry.negative
+                            && now_ms() < entry.fetched_at_ms + entry.ttl_ms + horizon =>
+                    {
                         self.stats.stale_on_error.fetch_add(1, Ordering::Relaxed);
-                        crate::log_warn!("cache", "serving stale value after upstream error", key = key, error = e.message);
+                        crate::log_warn!(
+                            "cache",
+                            "serving stale value after upstream error",
+                            key = key,
+                            error = e.message
+                        );
                         Ok(entry.lookup(Source::StaleOnError))
                     }
                     _ => Err(e),
@@ -429,7 +505,10 @@ impl Cache {
             *guard = Some(result.clone());
             flight.cv.notify_all();
         }
-        self.inflight.lock().unwrap_or_else(|e| e.into_inner()).remove(key);
+        self.inflight
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(key);
         result
     }
 
@@ -474,7 +553,11 @@ impl Cache {
         let dead: Vec<String> = inner
             .map
             .iter()
-            .filter(|(_, e)| now > e.fetched_at_ms + e.ttl_ms + e.stale_ms.max(if e.negative { 0 } else { horizon }))
+            .filter(|(_, e)| {
+                now > e.fetched_at_ms
+                    + e.ttl_ms
+                    + e.stale_ms.max(if e.negative { 0 } else { horizon })
+            })
             .map(|(k, _)| k.clone())
             .collect();
         for k in &dead {
@@ -517,7 +600,11 @@ impl Cache {
         let misses = s.misses.load(Ordering::Relaxed);
         let coalesced = s.coalesced.load(Ordering::Relaxed);
         let served = hits + stale + misses + coalesced;
-        let ratio = if served == 0 { 0.0 } else { (hits + stale + coalesced) as f64 / served as f64 };
+        let ratio = if served == 0 {
+            0.0
+        } else {
+            (hits + stale + coalesced) as f64 / served as f64
+        };
         let (entries, bytes) = {
             let inner = self.lock();
             (inner.map.len(), inner.bytes)
@@ -546,7 +633,9 @@ impl Cache {
     /// Writes a snapshot to the persistence file (atomic rename). Negative
     /// entries are not persisted.
     pub fn persist(&self) -> std::io::Result<usize> {
-        let Some(path) = &self.config.persist_path else { return Ok(0) };
+        let Some(path) = &self.config.persist_path else {
+            return Ok(0);
+        };
         if !self.dirty.swap(false, Ordering::Relaxed) {
             return Ok(0);
         }
@@ -556,7 +645,17 @@ impl Cache {
             inner
                 .lru
                 .values()
-                .filter_map(|k| inner.map.get(k).filter(|e| !e.negative).map(|e| (k.clone(), e.value.clone(), e.fetched_at_ms, e.ttl_ms, e.stale_ms)))
+                .filter_map(|k| {
+                    inner.map.get(k).filter(|e| !e.negative).map(|e| {
+                        (
+                            k.clone(),
+                            e.value.clone(),
+                            e.fetched_at_ms,
+                            e.ttl_ms,
+                            e.stale_ms,
+                        )
+                    })
+                })
                 .collect()
         };
         let tmp = path.with_extension("jsonl.tmp");
@@ -567,7 +666,11 @@ impl Cache {
         }
         let file = std::fs::File::create(&tmp)?;
         let mut w = std::io::BufWriter::new(file);
-        writeln!(w, "{}", crate::obj! { "format" => "steam-mcp-cache", "version" => 1 })?;
+        writeln!(
+            w,
+            "{}",
+            crate::obj! { "format" => "steam-mcp-cache", "version" => 1 }
+        )?;
         for (k, v, f, t, s) in &snapshot {
             let mut line = String::with_capacity(256);
             line.push_str("{\"k\":");
@@ -581,14 +684,20 @@ impl Cache {
         w.get_ref().sync_all()?;
         drop(w);
         std::fs::rename(&tmp, path)?;
-        self.stats.persisted_entries.store(snapshot.len() as u64, Ordering::Relaxed);
+        self.stats
+            .persisted_entries
+            .store(snapshot.len() as u64, Ordering::Relaxed);
         Ok(snapshot.len())
     }
 
     /// Loads a snapshot written by [`persist`](Self::persist).
     pub fn load(&self) -> usize {
-        let Some(path) = &self.config.persist_path else { return 0 };
-        let Ok(file) = std::fs::File::open(path) else { return 0 };
+        let Some(path) = &self.config.persist_path else {
+            return 0;
+        };
+        let Ok(file) = std::fs::File::open(path) else {
+            return 0;
+        };
         let now = now_ms();
         let horizon = self.config.max_stale_on_error.as_millis() as u64;
         let mut loaded = 0;
@@ -597,12 +706,21 @@ impl Cache {
             let Ok(v) = json::parse(&line) else { continue };
             if i == 0 {
                 if v["format"].as_str() != Some("steam-mcp-cache") {
-                    crate::log_warn!("cache", "ignoring unrecognized cache file", path = path.display());
+                    crate::log_warn!(
+                        "cache",
+                        "ignoring unrecognized cache file",
+                        path = path.display()
+                    );
                     return 0;
                 }
                 continue;
             }
-            let (Some(k), Some(f), Some(t), Some(s)) = (v["k"].as_str(), v["f"].as_u64(), v["t"].as_u64(), v["s"].as_u64()) else {
+            let (Some(k), Some(f), Some(t), Some(s)) = (
+                v["k"].as_str(),
+                v["f"].as_u64(),
+                v["t"].as_u64(),
+                v["s"].as_u64(),
+            ) else {
                 continue;
             };
             if now > f + t + s.max(horizon) {
@@ -613,13 +731,29 @@ impl Cache {
             let size = value.approx_size() + k.len() + 128;
             self.insert_entry(
                 k.to_string(),
-                Entry { value: Arc::new(value), hash, fetched_at_ms: f, ttl_ms: t, stale_ms: s, negative: false, size, tick: 0 },
+                Entry {
+                    value: Arc::new(value),
+                    hash,
+                    fetched_at_ms: f,
+                    ttl_ms: t,
+                    stale_ms: s,
+                    negative: false,
+                    size,
+                    tick: 0,
+                },
             );
             loaded += 1;
         }
         self.dirty.store(false, Ordering::Relaxed);
-        self.stats.loaded_entries.store(loaded as u64, Ordering::Relaxed);
-        crate::log_info!("cache", "loaded persisted cache", path = path.display(), entries = loaded);
+        self.stats
+            .loaded_entries
+            .store(loaded as u64, Ordering::Relaxed);
+        crate::log_info!(
+            "cache",
+            "loaded persisted cache",
+            path = path.display(),
+            entries = loaded
+        );
         loaded
     }
 
@@ -627,24 +761,26 @@ impl Cache {
     /// snapshots on an interval. Stops when `stop` is set.
     pub fn start_maintenance(self: &Arc<Self>, stop: Arc<AtomicBool>) {
         let cache = self.clone();
-        let _ = std::thread::Builder::new().name("cache-maint".into()).spawn(move || {
-            let interval = cache.config.persist_interval.max(Duration::from_secs(1));
-            let mut elapsed = Duration::ZERO;
-            while !stop.load(Ordering::Relaxed) {
-                std::thread::sleep(Duration::from_millis(250));
-                elapsed += Duration::from_millis(250);
-                if elapsed >= interval {
-                    elapsed = Duration::ZERO;
-                    let purged = cache.purge_expired();
-                    if purged > 0 {
-                        crate::log_debug!("cache", "purged expired entries", count = purged);
-                    }
-                    if let Err(e) = cache.persist() {
-                        crate::log_warn!("cache", "persist failed", error = e);
+        let _ = std::thread::Builder::new()
+            .name("cache-maint".into())
+            .spawn(move || {
+                let interval = cache.config.persist_interval.max(Duration::from_secs(1));
+                let mut elapsed = Duration::ZERO;
+                while !stop.load(Ordering::Relaxed) {
+                    std::thread::sleep(Duration::from_millis(250));
+                    elapsed += Duration::from_millis(250);
+                    if elapsed >= interval {
+                        elapsed = Duration::ZERO;
+                        let purged = cache.purge_expired();
+                        if purged > 0 {
+                            crate::log_debug!("cache", "purged expired entries", count = purged);
+                        }
+                        if let Err(e) = cache.persist() {
+                            crate::log_warn!("cache", "persist failed", error = e);
+                        }
                     }
                 }
-            }
-        });
+            });
     }
 }
 
@@ -666,13 +802,19 @@ mod tests {
         let cache = Cache::new(CacheConfig::default());
         let n = Arc::new(AtomicUsize::new(0));
         let p = Policy::new(60, 60);
-        let a = cache.get_or_fetch("k", &p, false, counting_fetch(n.clone(), 1)).unwrap();
+        let a = cache
+            .get_or_fetch("k", &p, false, counting_fetch(n.clone(), 1))
+            .unwrap();
         assert_eq!(a.source, Source::Miss);
-        let b = cache.get_or_fetch("k", &p, false, counting_fetch(n.clone(), 2)).unwrap();
+        let b = cache
+            .get_or_fetch("k", &p, false, counting_fetch(n.clone(), 2))
+            .unwrap();
         assert_eq!(b.source, Source::Hit);
         assert_eq!(*b.value, Value::from(1));
         assert_eq!(n.load(Ordering::SeqCst), 1);
-        let c = cache.get_or_fetch("k", &p, true, counting_fetch(n.clone(), 3)).unwrap();
+        let c = cache
+            .get_or_fetch("k", &p, true, counting_fetch(n.clone(), 3))
+            .unwrap();
         assert_eq!(*c.value, Value::from(3));
     }
 
@@ -698,21 +840,43 @@ mod tests {
     #[test]
     fn stale_while_revalidate_and_stale_on_error() {
         let cache = Cache::new(CacheConfig::default());
-        let p = Policy { ttl: Duration::from_millis(1), stale: Duration::from_secs(60), negative_ttl: Duration::ZERO, store: true };
+        let p = Policy {
+            ttl: Duration::from_millis(1),
+            stale: Duration::from_secs(60),
+            negative_ttl: Duration::ZERO,
+            store: true,
+        };
         let n = Arc::new(AtomicUsize::new(0));
-        cache.get_or_fetch("k", &p, false, counting_fetch(n.clone(), 1)).unwrap();
+        cache
+            .get_or_fetch("k", &p, false, counting_fetch(n.clone(), 1))
+            .unwrap();
         std::thread::sleep(Duration::from_millis(5));
-        let s = cache.get_or_fetch("k", &p, false, counting_fetch(n.clone(), 2)).unwrap();
+        let s = cache
+            .get_or_fetch("k", &p, false, counting_fetch(n.clone(), 2))
+            .unwrap();
         assert_eq!(s.source, Source::Stale);
         assert_eq!(*s.value, Value::from(1));
         std::thread::sleep(Duration::from_millis(100));
         assert_eq!(n.load(Ordering::SeqCst), 2, "background refresh ran");
 
-        let p2 = Policy { ttl: Duration::from_millis(1), stale: Duration::ZERO, negative_ttl: Duration::ZERO, store: true };
+        let p2 = Policy {
+            ttl: Duration::from_millis(1),
+            stale: Duration::ZERO,
+            negative_ttl: Duration::ZERO,
+            store: true,
+        };
         cache.put("e", Value::from("old"), &p2, false);
         std::thread::sleep(Duration::from_millis(5));
-        let failing: FetchFn = Arc::new(|| Err(FetchError { message: "down".into(), status: Some(503), transient: true }));
-        let r = cache.get_or_fetch("e", &p2, false, failing.clone()).unwrap();
+        let failing: FetchFn = Arc::new(|| {
+            Err(FetchError {
+                message: "down".into(),
+                status: Some(503),
+                transient: true,
+            })
+        });
+        let r = cache
+            .get_or_fetch("e", &p2, false, failing.clone())
+            .unwrap();
         assert_eq!(r.source, Source::StaleOnError);
         assert_eq!(*r.value, Value::from("old"));
         assert!(cache.get_or_fetch("missing", &p2, false, failing).is_err());
@@ -720,7 +884,10 @@ mod tests {
 
     #[test]
     fn lru_eviction_by_bytes() {
-        let cache = Cache::new(CacheConfig { max_bytes: 2000, ..Default::default() });
+        let cache = Cache::new(CacheConfig {
+            max_bytes: 2000,
+            ..Default::default()
+        });
         let p = Policy::new(60, 0);
         for i in 0..50 {
             cache.put(&format!("k{i}"), Value::from("x".repeat(100)), &p, false);
@@ -733,12 +900,23 @@ mod tests {
 
     #[test]
     fn persistence_roundtrip() {
-        let dir = std::env::temp_dir().join(format!("steam-mcp-test-{}", crate::util::crypto::random_id(6)));
+        let dir = std::env::temp_dir().join(format!(
+            "steam-mcp-test-{}",
+            crate::util::crypto::random_id(6)
+        ));
         let path = dir.join("cache.jsonl");
-        let cfg = CacheConfig { persist_path: Some(path.clone()), ..Default::default() };
+        let cfg = CacheConfig {
+            persist_path: Some(path.clone()),
+            ..Default::default()
+        };
         {
             let cache = Cache::new(cfg.clone());
-            cache.put("a|1", crate::obj! { "steamid" => 76561197960287930u64 }, &Policy::new(3600, 0), false);
+            cache.put(
+                "a|1",
+                crate::obj! { "steamid" => 76561197960287930u64 },
+                &Policy::new(3600, 0),
+                false,
+            );
             cache.put("neg", Value::Null, &Policy::new(3600, 0), true);
             assert_eq!(cache.persist().unwrap(), 1);
         }

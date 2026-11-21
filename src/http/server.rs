@@ -37,7 +37,10 @@ pub struct RequestError {
 
 impl RequestError {
     fn new(status: u16, message: impl Into<String>) -> Self {
-        RequestError { status, message: message.into() }
+        RequestError {
+            status,
+            message: message.into(),
+        }
     }
 }
 
@@ -54,11 +57,19 @@ pub fn read_request<S: Read + Write>(
         Err(e) if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut => {
             return Ok(None);
         }
-        Err(e) if e.kind() == io::ErrorKind::UnexpectedEof || e.kind() == io::ErrorKind::ConnectionReset => {
+        Err(e)
+            if e.kind() == io::ErrorKind::UnexpectedEof
+                || e.kind() == io::ErrorKind::ConnectionReset =>
+        {
             return Ok(None);
         }
         Err(e) => {
-            let status = if e.to_string().contains("too large") || e.to_string().contains("too long") { 431 } else { 400 };
+            let status =
+                if e.to_string().contains("too large") || e.to_string().contains("too long") {
+                    431
+                } else {
+                    400
+                };
             return Err(RequestError::new(status, e.to_string()));
         }
     };
@@ -84,14 +95,23 @@ pub fn read_request<S: Read + Write>(
     }
     if headers.has_token("expect", "100-continue") && fr != Framing::None {
         let w = reader.get_mut();
-        let _ = w.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").and_then(|_| w.flush());
+        let _ = w
+            .write_all(b"HTTP/1.1 100 Continue\r\n\r\n")
+            .and_then(|_| w.flush());
     }
     let body = read_body(reader, &fr, max_body).map_err(|e| {
-        if e.to_string().contains("limit") { RequestError::new(413, e.to_string()) } else { RequestError::new(400, e.to_string()) }
+        if e.to_string().contains("limit") {
+            RequestError::new(413, e.to_string())
+        } else {
+            RequestError::new(400, e.to_string())
+        }
     })?;
     // Accept absolute-form targets by stripping the origin.
     let mut target = target.to_string();
-    if let Some(rest) = target.strip_prefix("http://").or_else(|| target.strip_prefix("https://")) {
+    if let Some(rest) = target
+        .strip_prefix("http://")
+        .or_else(|| target.strip_prefix("https://"))
+    {
         target = match rest.find('/') {
             Some(i) => rest[i..].to_string(),
             None => "/".to_string(),
@@ -129,7 +149,11 @@ pub fn write_response(
         head.push_str("\r\n");
     }
     head.push_str(&format!("Content-Length: {}\r\n", body.len()));
-    head.push_str(if keep_alive { "Connection: keep-alive\r\n" } else { "Connection: close\r\n" });
+    head.push_str(if keep_alive {
+        "Connection: keep-alive\r\n"
+    } else {
+        "Connection: close\r\n"
+    });
     head.push_str("\r\n");
     w.write_all(head.as_bytes())?;
     w.write_all(body)?;
@@ -139,7 +163,9 @@ pub fn write_response(
 /// Starts a `text/event-stream` response. The body is written as raw SSE
 /// frames until the connection is closed (no chunked encoding).
 pub fn start_sse(w: &mut impl Write, headers: &[(&str, String)]) -> io::Result<()> {
-    let mut head = String::from("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache, no-transform\r\nX-Accel-Buffering: no\r\nConnection: close\r\n");
+    let mut head = String::from(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache, no-transform\r\nX-Accel-Buffering: no\r\nConnection: close\r\n",
+    );
     for (k, v) in headers {
         head.push_str(k);
         head.push_str(": ");
@@ -207,15 +233,24 @@ mod tests {
         assert_eq!(req.body, b"{}");
         assert!(req.keep_alive());
         let raw = b"GET / HTTP/1.1\r\n\r\n";
-        assert_eq!(read_request(&mut duplex(raw), 8192, 10).unwrap_err().status, 400);
+        assert_eq!(
+            read_request(&mut duplex(raw), 8192, 10).unwrap_err().status,
+            400
+        );
         let raw = b"POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 100\r\n\r\n";
-        assert_eq!(read_request(&mut duplex(raw), 8192, 10).unwrap_err().status, 413);
+        assert_eq!(
+            read_request(&mut duplex(raw), 8192, 10).unwrap_err().status,
+            413
+        );
     }
 
     #[test]
     fn sse_framing() {
         let mut out = Vec::new();
         write_sse_event(&mut out, "a\nb").unwrap();
-        assert_eq!(String::from_utf8(out).unwrap(), "event: message\ndata: a\ndata: b\n\n");
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "event: message\ndata: a\ndata: b\n\n"
+        );
     }
 }

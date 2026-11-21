@@ -6,7 +6,11 @@ const URL: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz012
 fn encode_with(data: &[u8], alphabet: &[u8; 64], pad: bool) -> String {
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
     for chunk in data.chunks(3) {
-        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
         let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
         out.push(alphabet[(n >> 18) as usize & 63] as char);
         out.push(alphabet[(n >> 12) as usize & 63] as char);
@@ -169,7 +173,10 @@ mod tests {
         for (raw, enc) in cases {
             assert_eq!(b64_encode(raw.as_bytes()), enc);
             assert_eq!(b64_decode(enc).unwrap(), raw.as_bytes());
-            assert_eq!(b64_decode(&b64url_encode(raw.as_bytes())).unwrap(), raw.as_bytes());
+            assert_eq!(
+                b64_decode(&b64url_encode(raw.as_bytes())).unwrap(),
+                raw.as_bytes()
+            );
         }
         assert_eq!(b64_encode("Hello, 世界".as_bytes()), "SGVsbG8sIOS4lueVjA==");
         assert!(b64_decode("A").is_none());
@@ -186,6 +193,9 @@ mod tests {
         assert_eq!(pct_decode("%zz", false), "%zz");
         let q = build_query([("key", "x y"), ("appid", "570")]);
         assert_eq!(q, "key=x%20y&appid=570");
-        assert_eq!(parse_query(&q), vec![("key".into(), "x y".into()), ("appid".into(), "570".into())]);
+        assert_eq!(
+            parse_query(&q),
+            vec![("key".into(), "x y".into()), ("appid".into(), "570".into())]
+        );
     }
 }

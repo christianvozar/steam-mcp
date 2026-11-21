@@ -17,11 +17,17 @@ impl Headers {
     }
 
     pub fn get(&self, name: &str) -> Option<&str> {
-        self.0.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.as_str())
+        self.0
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.as_str())
     }
 
     pub fn get_all<'a>(&'a self, name: &'a str) -> impl Iterator<Item = &'a str> + 'a {
-        self.0.iter().filter(move |(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.as_str())
+        self.0
+            .iter()
+            .filter(move |(k, _)| k.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.as_str())
     }
 
     pub fn push(&mut self, name: impl Into<String>, value: impl Into<String>) {
@@ -39,9 +45,14 @@ impl Headers {
 
     /// True if a comma-separated header contains `token` (case-insensitive).
     pub fn has_token(&self, name: &str, token: &str) -> bool {
-        self.get_all(name)
-            .flat_map(|v| v.split(','))
-            .any(|t| t.trim().split(';').next().unwrap_or("").trim().eq_ignore_ascii_case(token))
+        self.get_all(name).flat_map(|v| v.split(',')).any(|t| {
+            t.trim()
+                .split(';')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .eq_ignore_ascii_case(token)
+        })
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
@@ -155,7 +166,13 @@ impl Url {
         if !path.starts_with('/') {
             path.insert(0, '/');
         }
-        Some(Url { scheme, host: host.to_ascii_lowercase(), port, path_and_query: path, userinfo })
+        Some(Url {
+            scheme,
+            host: host.to_ascii_lowercase(),
+            port,
+            path_and_query: path,
+            userinfo,
+        })
     }
 
     pub fn is_https(&self) -> bool {
@@ -165,8 +182,16 @@ impl Url {
     /// `host[:port]` suitable for the Host header (port omitted when default).
     pub fn host_header(&self) -> String {
         let default = if self.is_https() { 443 } else { 80 };
-        let host = if self.host.contains(':') { format!("[{}]", self.host) } else { self.host.clone() };
-        if self.port == default { host } else { format!("{host}:{}", self.port) }
+        let host = if self.host.contains(':') {
+            format!("[{}]", self.host)
+        } else {
+            self.host.clone()
+        };
+        if self.port == default {
+            host
+        } else {
+            format!("{host}:{}", self.port)
+        }
     }
 
     pub fn origin(&self) -> String {
@@ -216,7 +241,9 @@ pub fn read_line(r: &mut impl BufRead, max: usize) -> io::Result<Option<String>>
     if buf.len() > max {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "line too long"));
     }
-    String::from_utf8(buf).map(Some).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "non-utf8 header"))
+    String::from_utf8(buf)
+        .map(Some)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "non-utf8 header"))
 }
 
 /// Reads header lines until the blank line. Returns `None` on clean EOF
@@ -231,7 +258,10 @@ pub fn read_head(r: &mut impl BufRead, max_bytes: usize) -> io::Result<Option<(S
     while start.is_empty() {
         guard += 1;
         if guard > 8 {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "too many empty lines"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "too many empty lines",
+            ));
         }
         start = match read_line(r, max_bytes)? {
             Some(l) => l,
@@ -248,17 +278,26 @@ pub fn read_head(r: &mut impl BufRead, max_bytes: usize) -> io::Result<Option<(S
         }
         total += line.len();
         if total > max_bytes || headers.0.len() > 200 {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "headers too large"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "headers too large",
+            ));
         }
         if line.starts_with(' ') || line.starts_with('\t') {
             // Obsolete line folding is rejected (RFC 9112 §5.2).
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "obsolete header folding"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "obsolete header folding",
+            ));
         }
         let (k, v) = line
             .split_once(':')
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "malformed header"))?;
         if k.is_empty() || k.bytes().any(|b| !is_tchar(b)) {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid header name"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid header name",
+            ));
         }
         headers.push(k, v.trim());
     }
@@ -281,27 +320,46 @@ pub enum Framing {
 
 pub fn framing(headers: &Headers, is_response: bool) -> io::Result<Framing> {
     if let Some(te) = headers.get("transfer-encoding") {
-        if te.split(',').next_back().map(|t| t.trim().eq_ignore_ascii_case("chunked")) == Some(true) {
+        if te
+            .split(',')
+            .next_back()
+            .map(|t| t.trim().eq_ignore_ascii_case("chunked"))
+            == Some(true)
+        {
             return Ok(Framing::Chunked);
         }
         return if is_response {
             Ok(Framing::UntilClose)
         } else {
-            Err(io::Error::new(io::ErrorKind::InvalidData, "unsupported transfer-encoding"))
+            Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "unsupported transfer-encoding",
+            ))
         };
     }
     let lengths: Vec<&str> = headers.get_all("content-length").collect();
     if let Some(first) = lengths.first() {
         if lengths.iter().any(|l| l != first) {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "conflicting content-length"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "conflicting content-length",
+            ));
         }
         let n: usize = first
             .trim()
             .parse()
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid content-length"))?;
-        return Ok(if n == 0 { Framing::None } else { Framing::Length(n) });
+        return Ok(if n == 0 {
+            Framing::None
+        } else {
+            Framing::Length(n)
+        });
     }
-    Ok(if is_response { Framing::UntilClose } else { Framing::None })
+    Ok(if is_response {
+        Framing::UntilClose
+    } else {
+        Framing::None
+    })
 }
 
 /// Reads a message body according to `framing`, enforcing `limit` bytes.
@@ -328,8 +386,9 @@ pub fn read_body(r: &mut impl BufRead, framing: &Framing, limit: usize) -> io::R
         Framing::Chunked => {
             let mut buf = Vec::new();
             loop {
-                let line = read_line(r, 4096)?
-                    .ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "eof in chunk size"))?;
+                let line = read_line(r, 4096)?.ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::UnexpectedEof, "eof in chunk size")
+                })?;
                 let size_str = line.split(';').next().unwrap_or("").trim();
                 let size = usize::from_str_radix(size_str, 16)
                     .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "bad chunk size"))?;
@@ -352,7 +411,10 @@ pub fn read_body(r: &mut impl BufRead, framing: &Framing, limit: usize) -> io::R
                 let mut crlf = [0u8; 2];
                 r.read_exact(&mut crlf)?;
                 if &crlf != b"\r\n" {
-                    return Err(io::Error::new(io::ErrorKind::InvalidData, "missing chunk terminator"));
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "missing chunk terminator",
+                    ));
                 }
             }
         }
@@ -410,7 +472,8 @@ mod tests {
 
     #[test]
     fn url_parsing() {
-        let u = Url::parse("https://api.steampowered.com/ISteamNews/GetNewsForApp/v2/?appid=570").unwrap();
+        let u = Url::parse("https://api.steampowered.com/ISteamNews/GetNewsForApp/v2/?appid=570")
+            .unwrap();
         assert_eq!(u.host, "api.steampowered.com");
         assert_eq!(u.port, 443);
         assert_eq!(u.path(), "/ISteamNews/GetNewsForApp/v2/");
@@ -438,7 +501,8 @@ mod tests {
 
     #[test]
     fn head_parsing() {
-        let raw = b"\r\nPOST /mcp HTTP/1.1\r\nHost: x\r\nContent-Length: 2\r\nAccept: a, b\r\n\r\nhi";
+        let raw =
+            b"\r\nPOST /mcp HTTP/1.1\r\nHost: x\r\nContent-Length: 2\r\nAccept: a, b\r\n\r\nhi";
         let mut r = BufReader::new(&raw[..]);
         let (start, h) = read_head(&mut r, 8192).unwrap().unwrap();
         assert_eq!(start, "POST /mcp HTTP/1.1");
@@ -448,7 +512,9 @@ mod tests {
         let bad = b"GET / HTTP/1.1\r\nBad Header: x\r\n\r\n";
         assert!(read_head(&mut BufReader::new(&bad[..]), 8192).is_err());
         let conflict = b"GET / HTTP/1.1\r\nContent-Length: 1\r\nContent-Length: 2\r\n\r\n";
-        let (_, h) = read_head(&mut BufReader::new(&conflict[..]), 8192).unwrap().unwrap();
+        let (_, h) = read_head(&mut BufReader::new(&conflict[..]), 8192)
+            .unwrap()
+            .unwrap();
         assert!(framing(&h, false).is_err());
     }
 }

@@ -53,8 +53,20 @@ pub struct Subscription {
 }
 
 impl Subscription {
-    pub fn new(id: Value, filter: Filter, principal: &str, sink: Arc<dyn Sink>) -> Arc<Subscription> {
-        Arc::new(Subscription { id, filter, principal: principal.to_string(), sink, closed: AtomicBool::new(false), signal: (Mutex::new(false), Condvar::new()) })
+    pub fn new(
+        id: Value,
+        filter: Filter,
+        principal: &str,
+        sink: Arc<dyn Sink>,
+    ) -> Arc<Subscription> {
+        Arc::new(Subscription {
+            id,
+            filter,
+            principal: principal.to_string(),
+            sink,
+            closed: AtomicBool::new(false),
+            signal: (Mutex::new(false), Condvar::new()),
+        })
     }
 
     pub fn is_closed(&self) -> bool {
@@ -82,7 +94,10 @@ impl Subscription {
 
     /// Sends the acknowledgment (must be the first message on the stream).
     pub fn acknowledge(&self, include_tasks: bool) -> bool {
-        self.notify("notifications/subscriptions/acknowledged", obj! { "notifications" => self.filter.to_json(include_tasks) })
+        self.notify(
+            "notifications/subscriptions/acknowledged",
+            obj! { "notifications" => self.filter.to_json(include_tasks) },
+        )
     }
 
     /// Ends the subscription gracefully with a completion response.
@@ -90,7 +105,10 @@ impl Subscription {
         if self.closed.swap(true, Ordering::SeqCst) {
             return;
         }
-        let resp = result_response(&self.id, obj! { "_meta" => obj! { META_SUBSCRIPTION_ID => self.id.clone() } });
+        let resp = result_response(
+            &self.id,
+            obj! { "_meta" => obj! { META_SUBSCRIPTION_ID => self.id.clone() } },
+        );
         self.sink.send(&resp);
         self.wake();
     }
@@ -108,7 +126,10 @@ impl Subscription {
         if self.closed.swap(true, Ordering::SeqCst) {
             return;
         }
-        self.sink.send(&notification("notifications/cancelled", obj! { "requestId" => self.id.clone(), "reason" => reason }));
+        self.sink.send(&notification(
+            "notifications/cancelled",
+            obj! { "requestId" => self.id.clone(), "reason" => reason },
+        ));
         self.wake();
     }
 
@@ -125,7 +146,9 @@ impl Subscription {
         if *g || self.is_closed() {
             return true;
         }
-        let (g, _) = cv.wait_timeout(g, timeout).unwrap_or_else(|e| e.into_inner());
+        let (g, _) = cv
+            .wait_timeout(g, timeout)
+            .unwrap_or_else(|e| e.into_inner());
         *g || self.is_closed()
     }
 
@@ -156,7 +179,10 @@ impl Hub {
     }
 
     pub fn add(&self, sub: Arc<Subscription>) {
-        self.subs.lock().unwrap_or_else(|e| e.into_inner()).push(sub);
+        self.subs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(sub);
     }
 
     /// Removes (closes) the subscription opened by request `id`.
@@ -184,19 +210,35 @@ impl Hub {
     }
 
     pub fn notify_tools_changed(&self) -> usize {
-        self.list().iter().filter(|s| s.filter.tools_list_changed).filter(|s| s.notify("notifications/tools/list_changed", obj! {})).count()
+        self.list()
+            .iter()
+            .filter(|s| s.filter.tools_list_changed)
+            .filter(|s| s.notify("notifications/tools/list_changed", obj! {}))
+            .count()
     }
 
     pub fn notify_prompts_changed(&self) -> usize {
-        self.list().iter().filter(|s| s.filter.prompts_list_changed).filter(|s| s.notify("notifications/prompts/list_changed", obj! {})).count()
+        self.list()
+            .iter()
+            .filter(|s| s.filter.prompts_list_changed)
+            .filter(|s| s.notify("notifications/prompts/list_changed", obj! {}))
+            .count()
     }
 
     pub fn notify_resources_changed(&self) -> usize {
-        self.list().iter().filter(|s| s.filter.resources_list_changed).filter(|s| s.notify("notifications/resources/list_changed", obj! {})).count()
+        self.list()
+            .iter()
+            .filter(|s| s.filter.resources_list_changed)
+            .filter(|s| s.notify("notifications/resources/list_changed", obj! {}))
+            .count()
     }
 
     pub fn notify_resource_updated(&self, uri: &str) -> usize {
-        self.list().iter().filter(|s| s.filter.resource_uris.iter().any(|u| u == uri)).filter(|s| s.notify("notifications/resources/updated", obj! { "uri" => uri })).count()
+        self.list()
+            .iter()
+            .filter(|s| s.filter.resource_uris.iter().any(|u| u == uri))
+            .filter(|s| s.notify("notifications/resources/updated", obj! { "uri" => uri }))
+            .count()
     }
 
     /// Delivers a task status snapshot to the owner's subscriptions on it.
@@ -210,7 +252,11 @@ impl Hub {
 
     /// Distinct resource URIs currently watched.
     pub fn watched_uris(&self) -> Vec<String> {
-        let mut out: Vec<String> = self.list().iter().flat_map(|s| s.filter.resource_uris.clone()).collect();
+        let mut out: Vec<String> = self
+            .list()
+            .iter()
+            .flat_map(|s| s.filter.resource_uris.clone())
+            .collect();
         out.sort();
         out.dedup();
         out
@@ -245,7 +291,11 @@ mod tests {
     fn routing_and_shutdown() {
         let hub = Hub::new();
         let cap = Arc::new(Capture(Mutex::new(Vec::new())));
-        let filter = Filter { tools_list_changed: true, resource_uris: vec!["steam://cache/stats".into()], ..Default::default() };
+        let filter = Filter {
+            tools_list_changed: true,
+            resource_uris: vec!["steam://cache/stats".into()],
+            ..Default::default()
+        };
         let sub = Subscription::new(Value::from(7), filter, "p", cap.clone());
         assert!(sub.acknowledge(false));
         hub.add(sub.clone());
@@ -257,12 +307,27 @@ mod tests {
         hub.shutdown();
         assert!(sub.is_closed());
         let msgs = cap.0.lock().unwrap();
-        assert_eq!(msgs[0]["method"].as_str(), Some("notifications/subscriptions/acknowledged"));
-        assert_eq!(msgs[0]["params"]["_meta"][META_SUBSCRIPTION_ID].as_i64(), Some(7));
-        assert_eq!(msgs[1]["method"].as_str(), Some("notifications/tools/list_changed"));
-        assert_eq!(msgs[2]["params"]["uri"].as_str(), Some("steam://cache/stats"));
+        assert_eq!(
+            msgs[0]["method"].as_str(),
+            Some("notifications/subscriptions/acknowledged")
+        );
+        assert_eq!(
+            msgs[0]["params"]["_meta"][META_SUBSCRIPTION_ID].as_i64(),
+            Some(7)
+        );
+        assert_eq!(
+            msgs[1]["method"].as_str(),
+            Some("notifications/tools/list_changed")
+        );
+        assert_eq!(
+            msgs[2]["params"]["uri"].as_str(),
+            Some("steam://cache/stats")
+        );
         assert_eq!(msgs[3]["id"].as_i64(), Some(7));
-        assert_eq!(msgs[3]["result"]["_meta"][META_SUBSCRIPTION_ID].as_i64(), Some(7));
+        assert_eq!(
+            msgs[3]["result"]["_meta"][META_SUBSCRIPTION_ID].as_i64(),
+            Some(7)
+        );
         assert!(hub.is_empty());
     }
 }

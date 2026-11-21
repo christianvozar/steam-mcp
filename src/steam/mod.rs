@@ -109,7 +109,11 @@ impl std::fmt::Display for SteamError {
 
 impl SteamError {
     pub fn new(kind: ErrorKind, message: impl Into<String>) -> SteamError {
-        SteamError { kind, message: message.into(), status: None }
+        SteamError {
+            kind,
+            message: message.into(),
+            status: None,
+        }
     }
 
     fn from_fetch(e: FetchError) -> SteamError {
@@ -121,10 +125,16 @@ impl SteamError {
             Some(429) => ErrorKind::RateLimited,
             Some(0) => ErrorKind::NotConfigured,
             Some(_) => ErrorKind::Upstream,
-            None if e.message.starts_with("rate limit") || e.message.contains("budget") => ErrorKind::RateLimited,
+            None if e.message.starts_with("rate limit") || e.message.contains("budget") => {
+                ErrorKind::RateLimited
+            }
             None => ErrorKind::Network,
         };
-        SteamError { kind, message: e.message, status: e.status.filter(|s| *s != 0) }
+        SteamError {
+            kind,
+            message: e.message,
+            status: e.status.filter(|s| *s != 0),
+        }
     }
 }
 
@@ -147,11 +157,23 @@ pub struct Call {
 
 impl Call {
     pub fn get(host: Host, path: &str, key: KeyKind, ttl_class: &'static str) -> Call {
-        Call { host, path: path.to_string(), params: Vec::new(), key, ttl_class, method: Method::Get, negative: None, namespace: None }
+        Call {
+            host,
+            path: path.to_string(),
+            params: Vec::new(),
+            key,
+            ttl_class,
+            method: Method::Get,
+            negative: None,
+            namespace: None,
+        }
     }
 
     pub fn post(host: Host, path: &str, key: KeyKind, ttl_class: &'static str) -> Call {
-        Call { method: Method::Post, ..Call::get(host, path, key, ttl_class) }
+        Call {
+            method: Method::Post,
+            ..Call::get(host, path, key, ttl_class)
+        }
     }
 
     pub fn param(mut self, k: &str, v: impl ToString) -> Call {
@@ -178,7 +200,10 @@ impl Call {
         let mut params = self.params.clone();
         params.sort();
         let q = build_query(params.iter().map(|(k, v)| (k.as_str(), v.as_str())));
-        let ns = self.namespace.clone().unwrap_or_else(|| format!("{}:{}", self.host.as_str(), self.path));
+        let ns = self
+            .namespace
+            .clone()
+            .unwrap_or_else(|| format!("{}:{}", self.host.as_str(), self.path));
         format!("{ns}?{q}|{}:{key_fp}", self.key.scope_label())
     }
 }
@@ -225,7 +250,11 @@ impl SteamClient {
             http,
             cache,
             limiter: TokenBucket::new(cfg.upstream_rps, cfg.upstream_burst),
-            budget: Mutex::new(Budget { day: crate::util::time::now_secs() / 86_400, used: 0, warned: false }),
+            budget: Mutex::new(Budget {
+                day: crate::util::time::now_secs() / 86_400,
+                used: 0,
+                warned: false,
+            }),
             config,
             stats: UpstreamStats::default(),
             catalog: catalog::CatalogIndex::default(),
@@ -247,14 +276,20 @@ impl SteamClient {
 
     fn key_for(cfg: &Config, kind: KeyKind) -> Result<Option<crate::config::Secret>, SteamError> {
         let missing = |what: &str, var: &str| {
-            Err(SteamError::new(ErrorKind::NotConfigured, format!("{what} is not configured; set {var} to use this capability")))
+            Err(SteamError::new(
+                ErrorKind::NotConfigured,
+                format!("{what} is not configured; set {var} to use this capability"),
+            ))
         };
         match kind {
             KeyKind::None => Ok(None),
             KeyKind::Optional => Ok(cfg.public_key().cloned()),
             KeyKind::Public => match cfg.public_key() {
                 Some(k) => Ok(Some(k.clone())),
-                None => missing("A Steam Web API key", "STEAM_API_KEY (or STEAM_PUBLISHER_KEY)"),
+                None => missing(
+                    "A Steam Web API key",
+                    "STEAM_API_KEY (or STEAM_PUBLISHER_KEY)",
+                ),
             },
             KeyKind::Publisher => match &cfg.publisher_key {
                 Some(k) => Ok(Some(k.clone())),
@@ -262,34 +297,50 @@ impl SteamClient {
             },
             KeyKind::Financial => match &cfg.financial_key {
                 Some(k) => Ok(Some(k.clone())),
-                None => missing("A Steamworks Financial API group key", "STEAM_FINANCIAL_KEY"),
+                None => missing(
+                    "A Steamworks Financial API group key",
+                    "STEAM_FINANCIAL_KEY",
+                ),
             },
         }
     }
 
     /// Whether the credential for `kind` is configured.
     pub fn has_key(&self, kind: KeyKind) -> bool {
-        Self::key_for(&self.config(), kind).map(|k| k.is_some() || matches!(kind, KeyKind::None | KeyKind::Optional)).unwrap_or(false)
+        Self::key_for(&self.config(), kind)
+            .map(|k| k.is_some() || matches!(kind, KeyKind::None | KeyKind::Optional))
+            .unwrap_or(false)
     }
 
     /// The cache key a call would use (for resource change tracking).
     pub fn cache_key_for(&self, call: &Call) -> Option<String> {
         let cfg = self.config();
         let key = Self::key_for(&cfg, call.key).ok()?;
-        Some(call.cache_key(&key.as_ref().map(|k| k.fingerprint()).unwrap_or_else(|| "-".into())))
+        Some(
+            call.cache_key(
+                &key.as_ref()
+                    .map(|k| k.fingerprint())
+                    .unwrap_or_else(|| "-".into()),
+            ),
+        )
     }
 
     /// Performs (or serves from cache) an upstream call.
     pub fn call(self: &Arc<Self>, call: &Call, force_refresh: bool) -> Result<Lookup, SteamError> {
         let cfg = self.config();
         let key = Self::key_for(&cfg, call.key)?;
-        let fp = key.as_ref().map(|k| k.fingerprint()).unwrap_or_else(|| "-".into());
+        let fp = key
+            .as_ref()
+            .map(|k| k.fingerprint())
+            .unwrap_or_else(|| "-".into());
         let cache_key = call.cache_key(&fp);
         let policy = cfg.policy(call.ttl_class);
         let this = self.clone();
         let call_owned = call.clone();
         let fetch: FetchFn = Arc::new(move || this.fetch(&call_owned, key.as_ref()));
-        self.cache.get_or_fetch(&cache_key, &policy, force_refresh, fetch).map_err(SteamError::from_fetch)
+        self.cache
+            .get_or_fetch(&cache_key, &policy, force_refresh, fetch)
+            .map_err(SteamError::from_fetch)
     }
 
     /// Like [`call`](Self::call) but never cached (one-shot verifications and writes).
@@ -314,15 +365,28 @@ impl SteamClient {
         let mut b = self.budget.lock().unwrap_or_else(|e| e.into_inner());
         let today = crate::util::time::now_secs() / 86_400;
         if b.day != today {
-            *b = Budget { day: today, used: 0, warned: false };
+            *b = Budget {
+                day: today,
+                used: 0,
+                warned: false,
+            };
         }
         if cfg.daily_budget > 0 && b.used >= cfg.daily_budget {
-            return Err(FetchError { message: "daily upstream call budget exhausted; serving cached data only".into(), status: None, transient: true });
+            return Err(FetchError {
+                message: "daily upstream call budget exhausted; serving cached data only".into(),
+                status: None,
+                transient: true,
+            });
         }
         b.used += 1;
         if cfg.daily_budget > 0 && !b.warned && b.used * 10 >= cfg.daily_budget * 8 {
             b.warned = true;
-            crate::log_warn!("steam", "80% of the daily upstream budget used", used = b.used, budget = cfg.daily_budget);
+            crate::log_warn!(
+                "steam",
+                "80% of the daily upstream budget used",
+                used = b.used,
+                budget = cfg.daily_budget
+            );
         }
         Ok(())
     }
@@ -331,7 +395,11 @@ impl SteamClient {
         self.budget.lock().map(|b| b.used).unwrap_or(0)
     }
 
-    fn fetch(&self, call: &Call, key: Option<&crate::config::Secret>) -> Result<Fetched, FetchError> {
+    fn fetch(
+        &self,
+        call: &Call,
+        key: Option<&crate::config::Secret>,
+    ) -> Result<Fetched, FetchError> {
         let cfg = self.config();
         let mut params: Vec<(String, String)> = call.params.clone();
         if call.host != Host::Store {
@@ -342,7 +410,11 @@ impl SteamClient {
         }
         let query = build_query(params.iter().map(|(k, v)| (k.as_str(), v.as_str())));
         let base = self.base(&cfg, call.host);
-        let path = if call.path.starts_with('/') { call.path.clone() } else { format!("/{}", call.path) };
+        let path = if call.path.starts_with('/') {
+            call.path.clone()
+        } else {
+            format!("/{}", call.path)
+        };
         let req = match call.method {
             Method::Get => Request::get(format!("{base}{path}?{query}")),
             Method::Post => Request::post_form(format!("{base}{path}"), query),
@@ -354,7 +426,11 @@ impl SteamClient {
             attempt += 1;
             if !self.limiter.acquire(Duration::from_secs(15)) {
                 self.stats.throttled.fetch_add(1, Ordering::Relaxed);
-                return Err(FetchError { message: "rate limit: upstream token bucket exhausted".into(), status: None, transient: true });
+                return Err(FetchError {
+                    message: "rate limit: upstream token bucket exhausted".into(),
+                    status: None,
+                    transient: true,
+                });
             }
             self.charge_budget(&cfg)?;
             self.stats.calls.fetch_add(1, Ordering::Relaxed);
@@ -362,10 +438,19 @@ impl SteamClient {
             let started = Instant::now();
             let result = self.http.send(&req);
             let elapsed = started.elapsed().as_millis() as u64;
-            self.stats.latency_ms_total.fetch_add(elapsed, Ordering::Relaxed);
+            self.stats
+                .latency_ms_total
+                .fetch_add(elapsed, Ordering::Relaxed);
             let (err, retry_after) = match result {
                 Ok(resp) => {
-                    crate::log_debug!("steam", "upstream response", path = log_path, status = resp.status, ms = elapsed, bytes = resp.body.len());
+                    crate::log_debug!(
+                        "steam",
+                        "upstream response",
+                        path = log_path,
+                        status = resp.status,
+                        ms = elapsed,
+                        bytes = resp.body.len()
+                    );
                     match resp.status {
                         200..=299 => {
                             if resp.body.iter().all(|b| b.is_ascii_whitespace()) {
@@ -381,7 +466,13 @@ impl SteamClient {
                                 }
                                 Err(e) => {
                                     self.stats.errors.fetch_add(1, Ordering::Relaxed);
-                                    Err(FetchError { message: format!("Steam returned a non-JSON response for {log_path}: {e}"), status: Some(502), transient: true })
+                                    Err(FetchError {
+                                        message: format!(
+                                            "Steam returned a non-JSON response for {log_path}: {e}"
+                                        ),
+                                        status: Some(502),
+                                        transient: true,
+                                    })
                                 }
                             };
                         }
@@ -393,34 +484,86 @@ impl SteamClient {
                             } else {
                                 "the API key lacks access to this method or app (partner methods need a publisher key with permissions for the app)"
                             };
-                            return Err(FetchError { message: format!("Steam returned {} for {log_path}: {hint}", resp.status), status: Some(resp.status), transient: false });
+                            return Err(FetchError {
+                                message: format!(
+                                    "Steam returned {} for {log_path}: {hint}",
+                                    resp.status
+                                ),
+                                status: Some(resp.status),
+                                transient: false,
+                            });
                         }
                         400 => {
                             self.stats.errors.fetch_add(1, Ordering::Relaxed);
-                            let detail = crate::util::truncate(&crate::util::strip_markup(&resp.text()), 300);
-                            return Err(FetchError { message: format!("Steam rejected the request parameters for {log_path} (400): {detail}"), status: Some(400), transient: false });
+                            let detail = crate::util::truncate(
+                                &crate::util::strip_markup(&resp.text()),
+                                300,
+                            );
+                            return Err(FetchError {
+                                message: format!(
+                                    "Steam rejected the request parameters for {log_path} (400): {detail}"
+                                ),
+                                status: Some(400),
+                                transient: false,
+                            });
                         }
                         429 | 500..=599 => {
-                            let ra = resp.headers.get("retry-after").and_then(|v| v.trim().parse::<u64>().ok());
-                            (FetchError { message: format!("Steam returned {} for {log_path}", resp.status), status: Some(resp.status), transient: true }, ra)
+                            let ra = resp
+                                .headers
+                                .get("retry-after")
+                                .and_then(|v| v.trim().parse::<u64>().ok());
+                            (
+                                FetchError {
+                                    message: format!(
+                                        "Steam returned {} for {log_path}",
+                                        resp.status
+                                    ),
+                                    status: Some(resp.status),
+                                    transient: true,
+                                },
+                                ra,
+                            )
                         }
                         other => {
                             self.stats.errors.fetch_add(1, Ordering::Relaxed);
-                            return Err(FetchError { message: format!("unexpected HTTP {other} from Steam for {log_path}"), status: Some(other), transient: false });
+                            return Err(FetchError {
+                                message: format!(
+                                    "unexpected HTTP {other} from Steam for {log_path}"
+                                ),
+                                status: Some(other),
+                                transient: false,
+                            });
                         }
                     }
                 }
-                Err(e) => (FetchError { message: format!("network error calling Steam ({log_path}): {e}"), status: None, transient: true }, None),
+                Err(e) => (
+                    FetchError {
+                        message: format!("network error calling Steam ({log_path}): {e}"),
+                        status: None,
+                        transient: true,
+                    },
+                    None,
+                ),
             };
             self.stats.errors.fetch_add(1, Ordering::Relaxed);
             if attempt >= max_attempts {
-                crate::log_warn!("steam", "upstream call failed", path = log_path, error = err.message, attempts = attempt);
+                crate::log_warn!(
+                    "steam",
+                    "upstream call failed",
+                    path = log_path,
+                    error = err.message,
+                    attempts = attempt
+                );
                 return Err(err);
             }
             self.stats.retries.fetch_add(1, Ordering::Relaxed);
             let backoff = retry_after
                 .map(|s| Duration::from_secs(s.min(30)))
-                .unwrap_or_else(|| Duration::from_millis(400 * (1 << (attempt - 1)) + crate::util::crypto::random_u64() % 250));
+                .unwrap_or_else(|| {
+                    Duration::from_millis(
+                        400 * (1 << (attempt - 1)) + crate::util::crypto::random_u64() % 250,
+                    )
+                });
             std::thread::sleep(backoff);
         }
     }
@@ -433,7 +576,7 @@ impl SteamClient {
             "upstreamErrors" => s.errors.load(Ordering::Relaxed),
             "retries" => s.retries.load(Ordering::Relaxed),
             "throttled" => s.throttled.load(Ordering::Relaxed),
-            "avgLatencyMs" => if calls == 0 { 0 } else { s.latency_ms_total.load(Ordering::Relaxed) / calls },
+            "avgLatencyMs" => s.latency_ms_total.load(Ordering::Relaxed).checked_div(calls).unwrap_or(0),
             "byHost" => crate::obj! {
                 "api" => s.by_host[0].load(Ordering::Relaxed),
                 "partner" => s.by_host[1].load(Ordering::Relaxed),
@@ -450,7 +593,11 @@ pub fn parse_steamid(s: &str) -> Option<u64> {
     let s = s.trim();
     let id: u64 = s.parse().ok()?;
     // Individual accounts in the public universe: 0x0110000100000000 + account id.
-    if (76_561_197_960_265_729..=76_561_202_255_233_023).contains(&id) { Some(id) } else { None }
+    if (76_561_197_960_265_729..=76_561_202_255_233_023).contains(&id) {
+        Some(id)
+    } else {
+        None
+    }
 }
 
 /// URL-encodes a path segment (used for vanity names and store paths).
@@ -464,8 +611,12 @@ mod tests {
 
     #[test]
     fn cache_keys_are_stable_and_scoped() {
-        let a = Call::get(Host::Public, "/X/Y/v1/", KeyKind::Optional, "short").param("b", 2).param("a", 1);
-        let b = Call::get(Host::Public, "/X/Y/v1/", KeyKind::Optional, "short").param("a", 1).param("b", 2);
+        let a = Call::get(Host::Public, "/X/Y/v1/", KeyKind::Optional, "short")
+            .param("b", 2)
+            .param("a", 1);
+        let b = Call::get(Host::Public, "/X/Y/v1/", KeyKind::Optional, "short")
+            .param("a", 1)
+            .param("b", 2);
         assert_eq!(a.cache_key("fp"), b.cache_key("fp"));
         assert_ne!(a.cache_key("fp"), a.cache_key("other"));
         assert!(!a.cache_key("fp").contains("key="));

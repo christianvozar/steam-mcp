@@ -26,9 +26,17 @@ pub fn validate(schema: &Value, value: &Value) -> Result<(), Vec<String>> {
             return Err(vec![format!("unsupported JSON Schema dialect: {d}")]);
         }
     }
-    let mut ctx = Ctx { root: schema, errors: Vec::new(), steps: 0 };
+    let mut ctx = Ctx {
+        root: schema,
+        errors: Vec::new(),
+        steps: 0,
+    };
     check(&mut ctx, schema, value, "$", 0);
-    if ctx.errors.is_empty() { Ok(()) } else { Err(ctx.errors) }
+    if ctx.errors.is_empty() {
+        Ok(())
+    } else {
+        Err(ctx.errors)
+    }
 }
 
 fn type_matches(t: &str, v: &Value) -> bool {
@@ -57,7 +65,8 @@ fn resolve<'a>(root: &'a Value, r: &str) -> Option<&'a Value> {
 fn check(ctx: &mut Ctx, schema: &Value, v: &Value, path: &str, depth: usize) {
     ctx.steps += 1;
     if depth > MAX_DEPTH || ctx.steps > MAX_STEPS {
-        ctx.errors.push(format!("{path}: schema too complex to validate"));
+        ctx.errors
+            .push(format!("{path}: schema too complex to validate"));
         return;
     }
     let s = match schema {
@@ -72,24 +81,36 @@ fn check(ctx: &mut Ctx, schema: &Value, v: &Value, path: &str, depth: usize) {
     if let Some(r) = s.get("$ref").and_then(|r| r.as_str()) {
         match resolve(ctx.root, r) {
             Some(target) => check(ctx, target, v, path, depth + 1),
-            None => ctx.errors.push(format!("{path}: unresolvable or non-local $ref {r}")),
+            None => ctx
+                .errors
+                .push(format!("{path}: unresolvable or non-local $ref {r}")),
         }
     }
     if let Some(t) = s.get("type") {
         let ok = match t {
             Value::String(t) => type_matches(t, v),
-            Value::Array(ts) => ts.iter().filter_map(|t| t.as_str()).any(|t| type_matches(t, v)),
+            Value::Array(ts) => ts
+                .iter()
+                .filter_map(|t| t.as_str())
+                .any(|t| type_matches(t, v)),
             _ => true,
         };
         if !ok {
-            ctx.errors.push(format!("{path}: expected {}, got {}", t.as_str().map(String::from).unwrap_or_else(|| t.to_string()), v.type_name()));
+            ctx.errors.push(format!(
+                "{path}: expected {}, got {}",
+                t.as_str()
+                    .map(String::from)
+                    .unwrap_or_else(|| t.to_string()),
+                v.type_name()
+            ));
             return;
         }
     }
     if let Some(Value::Array(options)) = s.get("enum") {
         if !options.contains(v) {
             let list: Vec<String> = options.iter().map(|o| o.to_string()).collect();
-            ctx.errors.push(format!("{path}: must be one of {}", list.join(", ")));
+            ctx.errors
+                .push(format!("{path}: must be one of {}", list.join(", ")));
         }
     }
     if let Some(c) = s.get("const") {
@@ -103,12 +124,14 @@ fn check(ctx: &mut Ctx, schema: &Value, v: &Value, path: &str, depth: usize) {
             let len = st.chars().count() as u64;
             if let Some(min) = s.get("minLength").and_then(|x| x.as_u64()) {
                 if len < min {
-                    ctx.errors.push(format!("{path}: must be at least {min} characters"));
+                    ctx.errors
+                        .push(format!("{path}: must be at least {min} characters"));
                 }
             }
             if let Some(max) = s.get("maxLength").and_then(|x| x.as_u64()) {
                 if len > max {
-                    ctx.errors.push(format!("{path}: must be at most {max} characters"));
+                    ctx.errors
+                        .push(format!("{path}: must be at most {max} characters"));
                 }
             }
             if let Some(fmt) = s.get("format").and_then(|f| f.as_str()) {
@@ -127,12 +150,14 @@ fn check(ctx: &mut Ctx, schema: &Value, v: &Value, path: &str, depth: usize) {
         Value::Array(items) => {
             if let Some(min) = s.get("minItems").and_then(|x| x.as_u64()) {
                 if (items.len() as u64) < min {
-                    ctx.errors.push(format!("{path}: must contain at least {min} items"));
+                    ctx.errors
+                        .push(format!("{path}: must contain at least {min} items"));
                 }
             }
             if let Some(max) = s.get("maxItems").and_then(|x| x.as_u64()) {
                 if (items.len() as u64) > max {
-                    ctx.errors.push(format!("{path}: must contain at most {max} items"));
+                    ctx.errors
+                        .push(format!("{path}: must contain at most {max} items"));
                 }
             }
             if s.get("uniqueItems").and_then(|x| x.as_bool()) == Some(true) {
@@ -153,7 +178,8 @@ fn check(ctx: &mut Ctx, schema: &Value, v: &Value, path: &str, depth: usize) {
             if let Some(Value::Array(req)) = s.get("required") {
                 for r in req.iter().filter_map(|r| r.as_str()) {
                     if !obj.contains_key(r) {
-                        ctx.errors.push(format!("{path}: missing required property '{r}'"));
+                        ctx.errors
+                            .push(format!("{path}: missing required property '{r}'"));
                     }
                 }
             }
@@ -163,7 +189,9 @@ fn check(ctx: &mut Ctx, schema: &Value, v: &Value, path: &str, depth: usize) {
                 match props.and_then(|p| p.get(k)) {
                     Some(ps) => check(ctx, ps, val, &child, depth + 1),
                     None => match s.get("additionalProperties") {
-                        Some(Value::Bool(false)) => ctx.errors.push(format!("{path}: unknown property '{k}'")),
+                        Some(Value::Bool(false)) => {
+                            ctx.errors.push(format!("{path}: unknown property '{k}'"))
+                        }
                         Some(ap @ Value::Object(_)) => check(ctx, ap, val, &child, depth + 1),
                         _ => {}
                     },
@@ -176,7 +204,11 @@ fn check(ctx: &mut Ctx, schema: &Value, v: &Value, path: &str, depth: usize) {
         if let Some(Value::Array(subs)) = s.get(kw) {
             let mut passed = 0;
             for sub in subs {
-                let mut sub_ctx = Ctx { root: ctx.root, errors: Vec::new(), steps: ctx.steps };
+                let mut sub_ctx = Ctx {
+                    root: ctx.root,
+                    errors: Vec::new(),
+                    steps: ctx.steps,
+                };
                 check(&mut sub_ctx, sub, v, path, depth + 1);
                 ctx.steps = sub_ctx.steps;
                 if sub_ctx.errors.is_empty() {
@@ -186,18 +218,27 @@ fn check(ctx: &mut Ctx, schema: &Value, v: &Value, path: &str, depth: usize) {
                 }
             }
             match mode {
-                1 if passed == 0 => ctx.errors.push(format!("{path}: does not match any allowed schema")),
-                2 if passed != 1 => ctx.errors.push(format!("{path}: must match exactly one schema (matched {passed})")),
+                1 if passed == 0 => ctx
+                    .errors
+                    .push(format!("{path}: does not match any allowed schema")),
+                2 if passed != 1 => ctx.errors.push(format!(
+                    "{path}: must match exactly one schema (matched {passed})"
+                )),
                 _ => {}
             }
         }
     }
     if let Some(not) = s.get("not") {
-        let mut sub_ctx = Ctx { root: ctx.root, errors: Vec::new(), steps: ctx.steps };
+        let mut sub_ctx = Ctx {
+            root: ctx.root,
+            errors: Vec::new(),
+            steps: ctx.steps,
+        };
         check(&mut sub_ctx, not, v, path, depth + 1);
         ctx.steps = sub_ctx.steps;
         if sub_ctx.errors.is_empty() {
-            ctx.errors.push(format!("{path}: must not match the excluded schema"));
+            ctx.errors
+                .push(format!("{path}: must not match the excluded schema"));
         }
     }
 }
@@ -245,7 +286,9 @@ fn coerce_inner(schema: &Value, v: &mut Value, depth: usize) {
     if depth > MAX_DEPTH {
         return;
     }
-    let Some(t) = primary_type(schema) else { return };
+    let Some(t) = primary_type(schema) else {
+        return;
+    };
     match (t, &*v) {
         ("integer", Value::String(s)) => {
             let s = s.trim();
@@ -268,7 +311,12 @@ fn coerce_inner(schema: &Value, v: &mut Value, depth: usize) {
         ("boolean", Value::Number(n)) if n.is_integer() => *v = Value::Bool(n.as_i64() != Some(0)),
         ("string", Value::Number(_)) => *v = Value::String(v.to_string()),
         ("array", Value::String(s)) => {
-            let parts: Vec<Value> = s.split(',').map(|p| p.trim()).filter(|p| !p.is_empty()).map(Value::from).collect();
+            let parts: Vec<Value> = s
+                .split(',')
+                .map(|p| p.trim())
+                .filter(|p| !p.is_empty())
+                .map(Value::from)
+                .collect();
             *v = Value::Array(parts);
         }
         ("array", Value::Number(_)) => *v = Value::Array(vec![v.clone()]),
@@ -302,7 +350,8 @@ mod tests {
 
     #[test]
     fn validates_common_keywords() {
-        let schema = parse(r##"{
+        let schema = parse(
+            r##"{
             "type":"object",
             "properties":{
                 "appid":{"type":"integer","minimum":1},
@@ -315,7 +364,9 @@ mod tests {
             "$defs":{"pos":{"type":"number","exclusiveMinimum":0}},
             "required":["appid"],
             "additionalProperties":false
-        }"##).unwrap();
+        }"##,
+        )
+        .unwrap();
         assert!(validate(&schema, &parse(r#"{"appid":570,"cc":"us","filter":"all","ids":[1,2],"date":"2026-01-31","ref":0.5}"#).unwrap()).is_ok());
         let errs = validate(&schema, &parse(r#"{"appid":0,"cc":"usa","filter":"x","ids":[1,1,3],"date":"2026-02-31","ref":0,"extra":1}"#).unwrap()).unwrap_err();
         assert_eq!(errs.len(), 8, "{errs:?}");

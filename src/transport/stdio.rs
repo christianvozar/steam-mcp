@@ -30,7 +30,10 @@ pub struct LineSink<W: Write + Send> {
 
 impl<W: Write + Send> LineSink<W> {
     pub fn new(out: W) -> Self {
-        LineSink { out: Mutex::new(out), broken: AtomicBool::new(false) }
+        LineSink {
+            out: Mutex::new(out),
+            broken: AtomicBool::new(false),
+        }
     }
 }
 
@@ -43,7 +46,10 @@ impl<W: Write + Send> Sink for LineSink<W> {
         let mut line = msg.to_string();
         line.push('\n');
         let mut out = self.out.lock().unwrap_or_else(|e| e.into_inner());
-        let ok = out.write_all(line.as_bytes()).and_then(|_| out.flush()).is_ok();
+        let ok = out
+            .write_all(line.as_bytes())
+            .and_then(|_| out.flush())
+            .is_ok();
         if !ok {
             self.broken.store(true, Ordering::Relaxed);
         }
@@ -62,7 +68,10 @@ impl Inflight {
         let (m, cv) = &self.idle;
         let mut g = m.lock().unwrap_or_else(|e| e.into_inner());
         while self.count.load(Ordering::SeqCst) >= MAX_WORKERS {
-            g = cv.wait_timeout(g, Duration::from_millis(100)).unwrap_or_else(|e| e.into_inner()).0;
+            g = cv
+                .wait_timeout(g, Duration::from_millis(100))
+                .unwrap_or_else(|e| e.into_inner())
+                .0;
         }
     }
     fn done(&self) {
@@ -74,7 +83,10 @@ impl Inflight {
 /// Reads one line with a length cap. `Ok(None)` at EOF.
 fn read_capped_line(r: &mut impl BufRead, buf: &mut Vec<u8>) -> io::Result<Option<()>> {
     buf.clear();
-    let n = r.by_ref().take(MAX_LINE as u64 + 1).read_until(b'\n', buf)?;
+    let n = r
+        .by_ref()
+        .take(MAX_LINE as u64 + 1)
+        .read_until(b'\n', buf)?;
     if n == 0 {
         return Ok(None);
     }
@@ -88,16 +100,27 @@ fn read_capped_line(r: &mut impl BufRead, buf: &mut Vec<u8>) -> io::Result<Optio
                 break;
             }
         }
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "message exceeds maximum size"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "message exceeds maximum size",
+        ));
     }
     Ok(Some(()))
 }
 
 /// Serves MCP over arbitrary reader/writer streams (stdin/stdout in
 /// production; pipes or sockets in tests).
-pub fn serve<R: Read, W: Write + Send + 'static>(core: Arc<Core>, input: R, output: W) -> io::Result<()> {
+pub fn serve<R: Read, W: Write + Send + 'static>(
+    core: Arc<Core>,
+    input: R,
+    output: W,
+) -> io::Result<()> {
     let sink: Arc<LineSink<W>> = Arc::new(LineSink::new(output));
-    let inflight = Arc::new(Inflight { map: Mutex::new(HashMap::new()), count: AtomicUsize::new(0), idle: (Mutex::new(()), Condvar::new()) });
+    let inflight = Arc::new(Inflight {
+        map: Mutex::new(HashMap::new()),
+        count: AtomicUsize::new(0),
+        idle: (Mutex::new(()), Condvar::new()),
+    });
     let mut reader = BufReader::with_capacity(256 * 1024, input);
     let mut buf = Vec::new();
     crate::log_info!("stdio", "serving MCP over stdio");
@@ -106,7 +129,10 @@ pub fn serve<R: Read, W: Write + Send + 'static>(core: Arc<Core>, input: R, outp
             Ok(None) => break,
             Ok(Some(())) => {}
             Err(e) if e.kind() == io::ErrorKind::InvalidData => {
-                sink.send(&error_response(None, &McpError::invalid_request(e.to_string())));
+                sink.send(&error_response(
+                    None,
+                    &McpError::invalid_request(e.to_string()),
+                ));
                 continue;
             }
             Err(e) => {
@@ -122,7 +148,10 @@ pub fn serve<R: Read, W: Write + Send + 'static>(core: Arc<Core>, input: R, outp
         let msg = match json::parse(line) {
             Ok(m) => m,
             Err(e) => {
-                sink.send(&error_response(None, &McpError::parse_error(format!("Invalid JSON: {e}"))));
+                sink.send(&error_response(
+                    None,
+                    &McpError::parse_error(format!("Invalid JSON: {e}")),
+                ));
                 continue;
             }
         };
@@ -133,14 +162,30 @@ pub fn serve<R: Read, W: Write + Send + 'static>(core: Arc<Core>, input: R, outp
             // Notifications run inline; cancellation needs the in-flight map.
             if msg["method"].as_str() == Some("notifications/cancelled") {
                 let rid = msg.at(&["params", "requestId"]).to_string();
-                let token = inflight.map.lock().unwrap_or_else(|e| e.into_inner()).get(&rid).cloned();
+                let token = inflight
+                    .map
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .get(&rid)
+                    .cloned();
                 if let Some(t) = token {
                     t.cancel();
-                    crate::log_debug!("stdio", "request cancelled", id = rid, reason = msg.at(&["params", "reason"]).as_str().unwrap_or(""));
+                    crate::log_debug!(
+                        "stdio",
+                        "request cancelled",
+                        id = rid,
+                        reason = msg.at(&["params", "reason"]).as_str().unwrap_or("")
+                    );
                 }
             }
             let s: Arc<dyn Sink> = sink.clone();
-            if let Reply::Response(r, _) = core.handle_message(&msg, Principal::local(), Transport::Stdio, s, CancelToken::new()) {
+            if let Reply::Response(r, _) = core.handle_message(
+                &msg,
+                Principal::local(),
+                Transport::Stdio,
+                s,
+                CancelToken::new(),
+            ) {
                 sink.send(&r);
             }
             continue;
@@ -152,7 +197,10 @@ pub fn serve<R: Read, W: Write + Send + 'static>(core: Arc<Core>, input: R, outp
             let mut map = inflight.map.lock().unwrap_or_else(|e| e.into_inner());
             if map.contains_key(&key) {
                 drop(map);
-                sink.send(&error_response(id.as_ref(), &McpError::invalid_request("A request with this id is already in flight")));
+                sink.send(&error_response(
+                    id.as_ref(),
+                    &McpError::invalid_request("A request with this id is already in flight"),
+                ));
                 continue;
             }
             map.insert(key.clone(), token.clone());
@@ -160,23 +208,38 @@ pub fn serve<R: Read, W: Write + Send + 'static>(core: Arc<Core>, input: R, outp
         inflight.wait_for_slot();
         inflight.count.fetch_add(1, Ordering::SeqCst);
         let (core2, sink2, inflight2) = (core.clone(), sink.clone(), inflight.clone());
-        let spawned = std::thread::Builder::new().name("stdio-req".into()).spawn(move || {
-            let s: Arc<dyn Sink> = sink2.clone();
-            let reply = core2.handle_message(&msg, Principal::local(), Transport::Stdio, s, token.clone());
-            match reply {
-                Reply::Response(r, _) if !token.is_cancelled() => {
-                    sink2.send(&r);
+        let spawned = std::thread::Builder::new()
+            .name("stdio-req".into())
+            .spawn(move || {
+                let s: Arc<dyn Sink> = sink2.clone();
+                let reply = core2.handle_message(
+                    &msg,
+                    Principal::local(),
+                    Transport::Stdio,
+                    s,
+                    token.clone(),
+                );
+                match reply {
+                    Reply::Response(r, _) if !token.is_cancelled() => {
+                        sink2.send(&r);
+                    }
+                    // Subscriptions stay registered in the hub; their notifications
+                    // and final response go through the shared sink.
+                    _ => {}
                 }
-                // Subscriptions stay registered in the hub; their notifications
-                // and final response go through the shared sink.
-                _ => {}
-            }
-            inflight2.map.lock().unwrap_or_else(|e| e.into_inner()).remove(&key);
-            inflight2.done();
-        });
+                inflight2
+                    .map
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .remove(&key);
+                inflight2.done();
+            });
         if spawned.is_err() {
             inflight.done();
-            sink.send(&error_response(id.as_ref(), &McpError::internal("could not schedule request")));
+            sink.send(&error_response(
+                id.as_ref(),
+                &McpError::internal("could not schedule request"),
+            ));
         }
     }
     crate::log_info!("stdio", "stdin closed; shutting down");

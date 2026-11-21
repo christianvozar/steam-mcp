@@ -91,8 +91,18 @@ pub struct Hints {
     pub open_world: bool,
 }
 
-pub const READ: Hints = Hints { read_only: true, destructive: false, idempotent: true, open_world: true };
-pub const LOCAL: Hints = Hints { read_only: true, destructive: false, idempotent: true, open_world: false };
+pub const READ: Hints = Hints {
+    read_only: true,
+    destructive: false,
+    idempotent: true,
+    open_world: true,
+};
+pub const LOCAL: Hints = Hints {
+    read_only: true,
+    destructive: false,
+    idempotent: true,
+    open_world: false,
+};
 
 /// A tool definition.
 pub struct ToolDef {
@@ -146,7 +156,11 @@ impl ToolDef {
             .as_object()
             .map(|p| {
                 p.iter()
-                    .filter_map(|(k, v)| v["x-mcp-header"].as_str().map(|h| (k.clone(), h.to_string())))
+                    .filter_map(|(k, v)| {
+                        v["x-mcp-header"]
+                            .as_str()
+                            .map(|h| (k.clone(), h.to_string()))
+                    })
                     .collect()
             })
             .unwrap_or_default()
@@ -213,7 +227,8 @@ pub fn p_steamids(max: u64) -> Value {
 }
 
 pub fn p_int(desc: &str, min: i64, max: i64, default: Option<i64>) -> Value {
-    let mut v = obj! { "type" => "integer", "minimum" => min, "maximum" => max, "description" => desc };
+    let mut v =
+        obj! { "type" => "integer", "minimum" => min, "maximum" => max, "description" => desc };
     if let Some(d) = default {
         v.set("default", d);
     }
@@ -249,7 +264,13 @@ pub fn p_lang() -> Value {
 }
 
 pub fn p_force() -> (&'static str, Value) {
-    ("force_refresh", p_bool("Bypass the cache and fetch fresh data from Steam. Use sparingly; cached data is usually sufficient.", false))
+    (
+        "force_refresh",
+        p_bool(
+            "Bypass the cache and fetch fresh data from Steam. Use sparingly; cached data is usually sufficient.",
+            false,
+        ),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -265,7 +286,10 @@ pub fn arg_i64(args: &Map, k: &str) -> Option<i64> {
 }
 
 pub fn arg_str<'a>(args: &'a Map, k: &str) -> Option<&'a str> {
-    args.get(k).and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty())
+    args.get(k)
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
 }
 
 pub fn arg_bool(args: &Map, k: &str, default: bool) -> bool {
@@ -274,8 +298,16 @@ pub fn arg_bool(args: &Map, k: &str, default: bool) -> bool {
 
 pub fn arg_list(args: &Map, k: &str) -> Vec<String> {
     match args.get(k) {
-        Some(Value::Array(a)) => a.iter().map(|v| v.to_param_string()).filter(|s| !s.is_empty()).collect(),
-        Some(Value::String(s)) => s.split(',').map(|p| p.trim().to_string()).filter(|p| !p.is_empty()).collect(),
+        Some(Value::Array(a)) => a
+            .iter()
+            .map(|v| v.to_param_string())
+            .filter(|s| !s.is_empty())
+            .collect(),
+        Some(Value::String(s)) => s
+            .split(',')
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty())
+            .collect(),
         Some(v @ Value::Number(_)) => vec![v.to_string()],
         _ => Vec::new(),
     }
@@ -286,11 +318,15 @@ pub fn force(args: &Map) -> bool {
 }
 
 pub fn cc(env: &ToolEnv, args: &Map) -> String {
-    arg_str(args, "cc").map(|s| s.to_ascii_lowercase()).unwrap_or_else(|| env.cfg().default_cc.clone())
+    arg_str(args, "cc")
+        .map(|s| s.to_ascii_lowercase())
+        .unwrap_or_else(|| env.cfg().default_cc.clone())
 }
 
 pub fn lang(env: &ToolEnv, args: &Map) -> String {
-    arg_str(args, "language").map(String::from).unwrap_or_else(|| env.cfg().default_language.clone())
+    arg_str(args, "language")
+        .map(String::from)
+        .unwrap_or_else(|| env.cfg().default_language.clone())
 }
 
 // ---------------------------------------------------------------------------
@@ -310,7 +346,11 @@ pub fn cache_meta(lookups: &[&Lookup]) -> Value {
             }
         })
         .collect();
-    if items.len() == 1 { items.into_iter().next().unwrap_or_default() } else { Value::Array(items) }
+    if items.len() == 1 {
+        items.into_iter().next().unwrap_or_default()
+    } else {
+        Value::Array(items)
+    }
 }
 
 /// A successful result: a human summary, the JSON as text (backwards
@@ -344,7 +384,9 @@ pub fn steam_error(e: SteamError) -> ToolOutcome {
     let advice = match e.kind {
         ErrorKind::NotConfigured => "",
         ErrorKind::Unauthorized => " Check that the configured key is valid.",
-        ErrorKind::Forbidden => " The key may not have permission for this app; partner methods require a publisher key from a Steamworks group with access to the app.",
+        ErrorKind::Forbidden => {
+            " The key may not have permission for this app; partner methods require a publisher key from a Steamworks group with access to the app."
+        }
         ErrorKind::NotFound => " Verify the ID exists and is visible to this key.",
         ErrorKind::BadRequest => " Adjust the arguments and retry.",
         ErrorKind::RateLimited => " Retry later; cached data will be served where available.",
@@ -367,7 +409,9 @@ macro_rules! try_steam {
 
 /// Returns a "not found" tool error for negative lookups.
 pub fn not_found(what: &str) -> ToolOutcome {
-    tool_error(format!("{what} was not found or is not visible to the configured key."))
+    tool_error(format!(
+        "{what} was not found or is not visible to the configured key."
+    ))
 }
 
 /// Number formatting with thousands separators.
@@ -393,21 +437,42 @@ mod tests {
         let mut names = std::collections::HashSet::new();
         for t in &tools {
             assert!(names.insert(t.name), "duplicate tool {}", t.name);
-            assert!(t.name.len() <= 128 && t.name.chars().all(|c| c.is_ascii_alphanumeric() || "_-.".contains(c)));
-            assert_eq!(t.input_schema["type"].as_str(), Some("object"), "{}", t.name);
+            assert!(
+                t.name.len() <= 128
+                    && t.name
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || "_-.".contains(c))
+            );
+            assert_eq!(
+                t.input_schema["type"].as_str(),
+                Some("object"),
+                "{}",
+                t.name
+            );
             assert!(!t.description.is_empty());
             // x-mcp-header values must be valid tokens, unique, on primitive non-number types.
             let mut seen = std::collections::HashSet::new();
             for (prop, h) in t.header_params() {
                 assert!(h.bytes().all(crate::http::is_tchar));
                 assert!(seen.insert(h.to_ascii_lowercase()));
-                let ty = t.input_schema["properties"][prop.as_str()]["type"].as_str().unwrap();
+                let ty = t.input_schema["properties"][prop.as_str()]["type"]
+                    .as_str()
+                    .unwrap();
                 assert!(matches!(ty, "integer" | "string" | "boolean"));
             }
             // Every schema must itself be self-consistent under our validator.
-            assert!(super::super::schema::validate(&t.input_schema, &Value::object()).is_ok() || t.input_schema.get("required").is_some(), "{}", t.name);
+            assert!(
+                super::super::schema::validate(&t.input_schema, &Value::object()).is_ok()
+                    || t.input_schema.get("required").is_some(),
+                "{}",
+                t.name
+            );
         }
-        assert!(tools.len() >= 50, "expected a comprehensive tool surface, got {}", tools.len());
+        assert!(
+            tools.len() >= 50,
+            "expected a comprehensive tool surface, got {}",
+            tools.len()
+        );
     }
 
     #[test]

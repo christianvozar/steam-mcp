@@ -70,11 +70,17 @@ pub struct Principal {
 impl Principal {
     /// Local/unauthenticated deployments are fully trusted.
     pub fn local() -> Principal {
-        Principal { id: "local".into(), scopes: vec![scopes::ADMIN.into()], authenticated: false }
+        Principal {
+            id: "local".into(),
+            scopes: vec![scopes::ADMIN.into()],
+            authenticated: false,
+        }
     }
 
     pub fn has_scope(&self, required: &str) -> bool {
-        self.scopes.iter().any(|s| s == required || scopes::implied(s).contains(&required))
+        self.scopes
+            .iter()
+            .any(|s| s == required || scopes::implied(s).contains(&required))
     }
 }
 
@@ -91,8 +97,25 @@ pub struct RequestContext {
 }
 
 impl RequestContext {
-    pub fn new(id: Option<Value>, method: &str, meta: RequestMeta, principal: Principal, transport: Transport, sink: Arc<dyn Sink>, cancel: CancelToken) -> RequestContext {
-        RequestContext { id, method: method.to_string(), meta, principal, transport, sink, cancel, last_progress: Mutex::new(f64::NEG_INFINITY) }
+    pub fn new(
+        id: Option<Value>,
+        method: &str,
+        meta: RequestMeta,
+        principal: Principal,
+        transport: Transport,
+        sink: Arc<dyn Sink>,
+        cancel: CancelToken,
+    ) -> RequestContext {
+        RequestContext {
+            id,
+            method: method.to_string(),
+            meta,
+            principal,
+            transport,
+            sink,
+            cancel,
+            last_progress: Mutex::new(f64::NEG_INFINITY),
+        }
     }
 
     /// A detached context for background task execution: same identity and
@@ -101,7 +124,15 @@ impl RequestContext {
         let mut meta = self.meta.clone();
         meta.progress_token = None;
         meta.log_level = None;
-        RequestContext::new(None, &self.method, meta, self.principal.clone(), Transport::Internal, Arc::new(NullSink), cancel)
+        RequestContext::new(
+            None,
+            &self.method,
+            meta,
+            self.principal.clone(),
+            Transport::Internal,
+            Arc::new(NullSink),
+            cancel,
+        )
     }
 
     pub fn is_cancelled(&self) -> bool {
@@ -111,7 +142,9 @@ impl RequestContext {
     /// Emits `notifications/progress` if the request opted in. Progress values
     /// are forced to be strictly increasing.
     pub fn progress(&self, progress: f64, total: Option<f64>, message: Option<&str>) {
-        let Some(token) = &self.meta.progress_token else { return };
+        let Some(token) = &self.meta.progress_token else {
+            return;
+        };
         if self.is_cancelled() {
             return;
         }
@@ -127,17 +160,23 @@ impl RequestContext {
         if let Some(m) = message {
             params.set("message", m);
         }
-        self.sink.send(&notification("notifications/progress", params));
+        self.sink
+            .send(&notification("notifications/progress", params));
     }
 
     /// Emits `notifications/message` at or above the requested level, only
     /// when the request carried `io.modelcontextprotocol/logLevel`.
     pub fn log(&self, level: LogLevel, logger: &str, data: Value) {
-        let Some(min) = self.meta.log_level else { return };
+        let Some(min) = self.meta.log_level else {
+            return;
+        };
         if level < min || self.is_cancelled() {
             return;
         }
-        self.sink.send(&notification("notifications/message", obj! { "level" => level.as_str(), "logger" => logger, "data" => data }));
+        self.sink.send(&notification(
+            "notifications/message",
+            obj! { "level" => level.as_str(), "logger" => logger, "data" => data },
+        ));
     }
 
     fn caps(&self) -> &Value {

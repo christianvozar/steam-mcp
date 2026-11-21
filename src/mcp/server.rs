@@ -112,8 +112,20 @@ impl Core {
 
     /// A context for server-internal reads (watchers, metrics).
     pub fn internal_ctx(&self) -> RequestContext {
-        let meta = RequestMeta { protocol_version: PROTOCOL_VERSION.into(), client_capabilities: Value::object(), ..Default::default() };
-        RequestContext::new(None, "internal", meta, Principal::local(), Transport::Internal, Arc::new(NullSink), CancelToken::new())
+        let meta = RequestMeta {
+            protocol_version: PROTOCOL_VERSION.into(),
+            client_capabilities: Value::object(),
+            ..Default::default()
+        };
+        RequestContext::new(
+            None,
+            "internal",
+            meta,
+            Principal::local(),
+            Transport::Internal,
+            Arc::new(NullSink),
+            CancelToken::new(),
+        )
     }
 
     // -----------------------------------------------------------------------
@@ -121,25 +133,46 @@ impl Core {
     // -----------------------------------------------------------------------
 
     /// Handles one inbound JSON-RPC message.
-    pub fn handle_message(self: &Arc<Self>, msg: &Value, principal: Principal, transport: Transport, sink: Arc<dyn Sink>, cancel: CancelToken) -> Reply {
+    pub fn handle_message(
+        self: &Arc<Self>,
+        msg: &Value,
+        principal: Principal,
+        transport: Transport,
+        sink: Arc<dyn Sink>,
+        cancel: CancelToken,
+    ) -> Reply {
         let Some(m) = msg.as_object() else {
-            { let e = McpError::invalid_request("A JSON-RPC message must be an object (batches are not supported)"); return Reply::Response(error_response(None, &e), e.http_status); }
+            {
+                let e = McpError::invalid_request(
+                    "A JSON-RPC message must be an object (batches are not supported)",
+                );
+                return Reply::Response(error_response(None, &e), e.http_status);
+            }
         };
         let id = m.get("id").filter(|v| !v.is_null()).cloned();
         let valid_id = id.as_ref().filter(|i| valid_request_id(i)).cloned();
         if m.get("jsonrpc").and_then(|v| v.as_str()) != Some(JSONRPC_VERSION) {
-            { let e = McpError::invalid_request("jsonrpc must be \"2.0\""); return Reply::Response(error_response(valid_id.as_ref(), &e), e.http_status); }
+            {
+                let e = McpError::invalid_request("jsonrpc must be \"2.0\"");
+                return Reply::Response(error_response(valid_id.as_ref(), &e), e.http_status);
+            }
         }
         let Some(method) = m.get("method").and_then(|v| v.as_str()) else {
             if m.contains_key("result") || m.contains_key("error") {
                 crate::log_debug!("mcp", "ignoring JSON-RPC response sent by client");
                 return Reply::NoResponse;
             }
-            { let e = McpError::invalid_request("missing method"); return Reply::Response(error_response(valid_id.as_ref(), &e), e.http_status); }
+            {
+                let e = McpError::invalid_request("missing method");
+                return Reply::Response(error_response(valid_id.as_ref(), &e), e.http_status);
+            }
         };
         let params = m.get("params");
         if params.is_some_and(|p| !p.is_object() && !p.is_null()) {
-            { let e = McpError::invalid_request("params must be an object"); return Reply::Response(error_response(valid_id.as_ref(), &e), e.http_status); }
+            {
+                let e = McpError::invalid_request("params must be an object");
+                return Reply::Response(error_response(valid_id.as_ref(), &e), e.http_status);
+            }
         }
         let Some(id) = id else {
             self.stats.notifications.fetch_add(1, Ordering::Relaxed);
@@ -147,16 +180,30 @@ impl Core {
             return Reply::NoResponse;
         };
         if valid_id.is_none() {
-            { let e = McpError::invalid_request("id must be a string or integer"); return Reply::Response(error_response(None, &e), e.http_status); }
+            {
+                let e = McpError::invalid_request("id must be a string or integer");
+                return Reply::Response(error_response(None, &e), e.http_status);
+            }
         }
         self.stats.requests.fetch_add(1, Ordering::Relaxed);
-        *self.stats.by_method.lock().unwrap_or_else(|e| e.into_inner()).entry(method.to_string()).or_default() += 1;
+        *self
+            .stats
+            .by_method
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entry(method.to_string())
+            .or_default() += 1;
 
         if method == "initialize" {
             // Legacy (handshake-based) clients: name what we support.
-            let requested = params.and_then(|p| p["protocolVersion"].as_str()).unwrap_or("unknown");
+            let requested = params
+                .and_then(|p| p["protocolVersion"].as_str())
+                .unwrap_or("unknown");
             let mut e = McpError::unsupported_version(requested);
-            e.message = format!("This server implements the stateless MCP revision {PROTOCOL_VERSION} only; the initialize handshake is not supported. Supported versions: {}", SUPPORTED_VERSIONS.join(", "));
+            e.message = format!(
+                "This server implements the stateless MCP revision {PROTOCOL_VERSION} only; the initialize handshake is not supported. Supported versions: {}",
+                SUPPORTED_VERSIONS.join(", ")
+            );
             self.stats.errors.fetch_add(1, Ordering::Relaxed);
             return Reply::Response(error_response(Some(&id), &e), e.http_status);
         }
@@ -170,15 +217,32 @@ impl Core {
         };
         if let Err(wait) = self.limiter.check(&principal.id) {
             self.stats.errors.fetch_add(1, Ordering::Relaxed);
-            { let e = McpError::rate_limited(wait.as_millis() as u64 + 1); return Reply::Response(error_response(Some(&id), &e), e.http_status); }
+            {
+                let e = McpError::rate_limited(wait.as_millis() as u64 + 1);
+                return Reply::Response(error_response(Some(&id), &e), e.http_status);
+            }
         }
-        let ctx = RequestContext::new(Some(id.clone()), method, meta, principal, transport, sink, cancel);
+        let ctx = RequestContext::new(
+            Some(id.clone()),
+            method,
+            meta,
+            principal,
+            transport,
+            sink,
+            cancel,
+        );
         let started = Instant::now();
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.dispatch(&ctx, params)))
-            .unwrap_or_else(|_| Err(McpError::internal("internal server error")));
+        let outcome =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.dispatch(&ctx, params)))
+                .unwrap_or_else(|_| Err(McpError::internal("internal server error")));
         let elapsed = started.elapsed().as_millis();
         if ctx.is_cancelled() {
-            crate::log_debug!("mcp", "request cancelled; response suppressed", method = method, ms = elapsed);
+            crate::log_debug!(
+                "mcp",
+                "request cancelled; response suppressed",
+                method = method,
+                ms = elapsed
+            );
             return Reply::NoResponse;
         }
         match outcome {
@@ -186,7 +250,13 @@ impl Core {
             Ok(Dispatched::Subscription(s)) => Reply::Subscription(s),
             Err(e) => {
                 self.stats.errors.fetch_add(1, Ordering::Relaxed);
-                crate::log_debug!("mcp", "request failed", method = method, code = e.code, error = e.message);
+                crate::log_debug!(
+                    "mcp",
+                    "request failed",
+                    method = method,
+                    code = e.code,
+                    error = e.message
+                );
                 Reply::Response(error_response(Some(&id), &e), e.http_status)
             }
         }
@@ -255,7 +325,9 @@ impl Core {
             s.push_str(" A Financial API key is configured: use steam_partner_get_changed_sales_dates, then steam_partner_sales_summary or steam_partner_get_detailed_sales.");
         }
         if cfg.public_key().is_none() {
-            s.push_str(" No Steam Web API key is configured, so player-profile tools are unavailable.");
+            s.push_str(
+                " No Steam Web API key is configured, so player-profile tools are unavailable.",
+            );
         }
         s
     }
@@ -275,7 +347,11 @@ impl Core {
     // Pagination
     // -----------------------------------------------------------------------
 
-    fn paginate(&self, items: Vec<Value>, params: &Value) -> Result<(Vec<Value>, Option<String>), McpError> {
+    fn paginate(
+        &self,
+        items: Vec<Value>,
+        params: &Value,
+    ) -> Result<(Vec<Value>, Option<String>), McpError> {
         let page = self.config.get().page_size.max(1);
         let offset = match params.get("cursor") {
             None | Some(Value::Null) => 0,
@@ -291,11 +367,19 @@ impl Core {
             Some(_) => return Err(McpError::invalid_params("Invalid cursor: must be a string")),
         };
         let end = (offset + page).min(items.len());
-        let next = (end < items.len()).then(|| b64url_encode(format!("{PAGE_CURSOR_PREFIX}{end}").as_bytes()));
+        let next = (end < items.len())
+            .then(|| b64url_encode(format!("{PAGE_CURSOR_PREFIX}{end}").as_bytes()));
         Ok((items[offset..end].to_vec(), next))
     }
 
-    fn list_result(&self, key: &str, items: Vec<Value>, params: &Value, ttl_ms: u64, scope: &str) -> Res {
+    fn list_result(
+        &self,
+        key: &str,
+        items: Vec<Value>,
+        params: &Value,
+        ttl_ms: u64,
+        scope: &str,
+    ) -> Res {
         let (page, next) = self.paginate(items, params)?;
         let mut r = obj! { key => page, "ttlMs" => ttl_ms, "cacheScope" => scope };
         if let Some(n) = next {
@@ -315,7 +399,10 @@ impl Core {
     }
 
     pub fn visible_tools(&self, principal: &Principal) -> Vec<&ToolDef> {
-        self.tools.iter().filter(|t| self.tool_enabled(t) && principal.has_scope(t.scope)).collect()
+        self.tools
+            .iter()
+            .filter(|t| self.tool_enabled(t) && principal.has_scope(t.scope))
+            .collect()
     }
 
     pub fn find_tool(&self, name: &str) -> Option<&ToolDef> {
@@ -323,24 +410,36 @@ impl Core {
     }
 
     fn list_tools(&self, ctx: &RequestContext, p: &Value) -> Res {
-        let items: Vec<Value> = self.visible_tools(&ctx.principal).iter().map(|t| t.to_json()).collect();
+        let items: Vec<Value> = self
+            .visible_tools(&ctx.principal)
+            .iter()
+            .map(|t| t.to_json())
+            .collect();
         self.list_result("tools", items, p, 300_000, resources::list_scope(self))
     }
 
     fn insufficient_scope(scope: &str) -> McpError {
-        McpError::new(FORBIDDEN, format!("Insufficient scope: this operation requires {scope}"))
-            .with_data(obj! { "requiredScope" => scope })
-            .http(403)
+        McpError::new(
+            FORBIDDEN,
+            format!("Insufficient scope: this operation requires {scope}"),
+        )
+        .with_data(obj! { "requiredScope" => scope })
+        .http(403)
     }
 
     fn call_tool(self: &Arc<Self>, ctx: &RequestContext, p: &Value) -> Res {
-        let name = p["name"].as_str().ok_or_else(|| McpError::invalid_params("tools/call requires a string 'name'"))?;
+        let name = p["name"]
+            .as_str()
+            .ok_or_else(|| McpError::invalid_params("tools/call requires a string 'name'"))?;
         let args_value = match p.get("arguments") {
             None | Some(Value::Null) => Value::object(),
             Some(v @ Value::Object(_)) => v.clone(),
             Some(_) => return Err(McpError::invalid_params("'arguments' must be an object")),
         };
-        let tool = self.find_tool(name).filter(|t| self.tool_enabled(t)).ok_or_else(|| McpError::invalid_params(format!("Unknown tool: {name}")))?;
+        let tool = self
+            .find_tool(name)
+            .filter(|t| self.tool_enabled(t))
+            .ok_or_else(|| McpError::invalid_params(format!("Unknown tool: {name}")))?;
         if !ctx.principal.has_scope(tool.scope) {
             return Err(Self::insufficient_scope(tool.scope));
         }
@@ -350,10 +449,18 @@ impl Core {
         let responses = match p.get("inputResponses") {
             None | Some(Value::Null) => None,
             Some(Value::Object(m)) if m.values().all(|v| v.is_object()) => Some(m.clone()),
-            Some(_) => return Err(McpError::invalid_params("'inputResponses' must be an object mapping keys to result objects")),
+            Some(_) => {
+                return Err(McpError::invalid_params(
+                    "'inputResponses' must be an object mapping keys to result objects",
+                ));
+            }
         };
         let salient = obj! { "name" => name, "arguments" => args_value.clone() };
-        let binding = Binding { method: "tools/call", salient: &salient, principal: &ctx.principal.id };
+        let binding = Binding {
+            method: "tools/call",
+            salient: &salient,
+            principal: &ctx.principal.id,
+        };
         let state = match p.get("requestState") {
             None | Some(Value::Null) => None,
             Some(Value::String(s)) => Some(self.sealer.open(s, &binding)?),
@@ -371,13 +478,23 @@ impl Core {
             }));
         }
         let args = args_value.as_object().cloned().unwrap_or_default();
-        ctx.log(LogLevel::Debug, "tools", obj! { "tool" => name, "event" => "start" });
+        ctx.log(
+            LogLevel::Debug,
+            "tools",
+            obj! { "tool" => name, "event" => "start" },
+        );
         let started = Instant::now();
 
-        let outcome = if tool.task && ctx.supports_tasks() && responses.is_none() && state.is_none() {
+        let outcome = if tool.task && ctx.supports_tasks() && responses.is_none() && state.is_none()
+        {
             return Ok(Dispatched::Result(self.run_as_task(ctx, tool, args)?));
         } else {
-            let env = ToolEnv { core: self, ctx, mrtr: Mrtr { responses, state }, task: None };
+            let env = ToolEnv {
+                core: self,
+                ctx,
+                mrtr: Mrtr { responses, state },
+                task: None,
+            };
             (tool.handler)(&env, &args)
         };
         let elapsed = started.elapsed().as_millis();
@@ -387,7 +504,14 @@ impl Core {
                 if is_error {
                     self.stats.tool_errors.fetch_add(1, Ordering::Relaxed);
                 }
-                crate::log_info!("tools", "tool call", tool = name, principal = ctx.principal.id, ms = elapsed, error = is_error);
+                crate::log_info!(
+                    "tools",
+                    "tool call",
+                    tool = name,
+                    principal = ctx.principal.id,
+                    ms = elapsed,
+                    error = is_error
+                );
                 ctx.log(if is_error { LogLevel::Warning } else { LogLevel::Info }, "tools", obj! { "tool" => name, "event" => "done", "ms" => elapsed as u64, "isError" => is_error });
                 Ok(Dispatched::Result(r))
             }
@@ -396,7 +520,10 @@ impl Core {
                 self.stats.input_required.fetch_add(1, Ordering::Relaxed);
                 let mut r = obj! { "resultType" => "input_required", "inputRequests" => Value::Object(requests) };
                 if let Some(s) = state {
-                    r.set("requestState", self.sealer.seal(&binding, s, Duration::from_secs(600)));
+                    r.set(
+                        "requestState",
+                        self.sealer.seal(&binding, s, Duration::from_secs(600)),
+                    );
                 }
                 Ok(Dispatched::Result(r))
             }
@@ -411,17 +538,29 @@ impl Core {
                 Some("elicitation/create") => {
                     let url = req.at(&["params", "mode"]).as_str() == Some("url");
                     if url && !ctx.supports_elicitation_url() {
-                        return Err(McpError::missing_capability(obj! { "elicitation" => obj! { "url" => obj! {} } }, "URL-mode elicitation"));
+                        return Err(McpError::missing_capability(
+                            obj! { "elicitation" => obj! { "url" => obj! {} } },
+                            "URL-mode elicitation",
+                        ));
                     }
                     if !url && !ctx.supports_elicitation_form() {
-                        return Err(McpError::missing_capability(obj! { "elicitation" => obj! { "form" => obj! {} } }, "form-mode elicitation"));
+                        return Err(McpError::missing_capability(
+                            obj! { "elicitation" => obj! { "form" => obj! {} } },
+                            "form-mode elicitation",
+                        ));
                     }
                 }
                 Some("sampling/createMessage") if !ctx.supports_sampling() => {
-                    return Err(McpError::missing_capability(obj! { "sampling" => obj! {} }, "sampling"));
+                    return Err(McpError::missing_capability(
+                        obj! { "sampling" => obj! {} },
+                        "sampling",
+                    ));
                 }
                 Some("roots/list") if !ctx.supports_roots() => {
-                    return Err(McpError::missing_capability(obj! { "roots" => obj! {} }, "roots"));
+                    return Err(McpError::missing_capability(
+                        obj! { "roots" => obj! {} },
+                        "roots",
+                    ));
                 }
                 Some("sampling/createMessage" | "roots/list") => {}
                 _ => return Err(McpError::internal("invalid input request generated")),
@@ -432,31 +571,60 @@ impl Core {
 
     /// Runs a task-capable tool in the background. Returns the final result if
     /// it completes within the synchronous window, otherwise a CreateTaskResult.
-    fn run_as_task(self: &Arc<Self>, ctx: &RequestContext, tool: &ToolDef, args: Map) -> Result<Value, McpError> {
+    fn run_as_task(
+        self: &Arc<Self>,
+        ctx: &RequestContext,
+        tool: &ToolDef,
+        args: Map,
+    ) -> Result<Value, McpError> {
         let cfg = self.config.get();
-        let task = self.tasks.create(&ctx.principal.id, Duration::from_secs(cfg.task_ttl_secs.max(60)), Duration::from_millis(1000));
+        let task = self.tasks.create(
+            &ctx.principal.id,
+            Duration::from_secs(cfg.task_ttl_secs.max(60)),
+            Duration::from_millis(1000),
+        );
         self.stats.tasks_created.fetch_add(1, Ordering::Relaxed);
         let core = self.clone();
         let worker_task = task.clone();
         let worker_ctx = ctx.detached(task.cancel_token());
         let name = tool.name;
-        let spawned = std::thread::Builder::new().name(format!("task-{name}")).spawn(move || {
-            let Some(tool) = core.find_tool(name) else { return };
-            let env = ToolEnv { core: &core, ctx: &worker_ctx, mrtr: Mrtr::default(), task: Some(worker_task.clone()) };
-            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (tool.handler)(&env, &args)));
-            match outcome {
-                Ok(ToolOutcome::Done(mut r)) => {
-                    if let Value::Object(m) = &mut r {
-                        m.insert("resultType", "complete");
+        let spawned = std::thread::Builder::new()
+            .name(format!("task-{name}"))
+            .spawn(move || {
+                let Some(tool) = core.find_tool(name) else {
+                    return;
+                };
+                let env = ToolEnv {
+                    core: &core,
+                    ctx: &worker_ctx,
+                    mrtr: Mrtr::default(),
+                    task: Some(worker_task.clone()),
+                };
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    (tool.handler)(&env, &args)
+                }));
+                match outcome {
+                    Ok(ToolOutcome::Done(mut r)) => {
+                        if let Value::Object(m) = &mut r {
+                            m.insert("resultType", "complete");
+                        }
+                        worker_task.complete(r)
                     }
-                    worker_task.complete(r)
+                    Ok(ToolOutcome::InputRequired { .. }) => worker_task.fail(
+                        McpError::internal("task-capable tool requested synchronous input")
+                            .to_json(),
+                    ),
+                    Ok(ToolOutcome::Error(e)) => worker_task.fail(e.to_json()),
+                    Err(_) => worker_task.fail(McpError::internal("tool panicked").to_json()),
                 }
-                Ok(ToolOutcome::InputRequired { .. }) => worker_task.fail(McpError::internal("task-capable tool requested synchronous input").to_json()),
-                Ok(ToolOutcome::Error(e)) => worker_task.fail(e.to_json()),
-                Err(_) => worker_task.fail(McpError::internal("tool panicked").to_json()),
-            }
-            crate::log_info!("tasks", "task finished", task = worker_task.id, tool = name, status = worker_task.status().as_str());
-        });
+                crate::log_info!(
+                    "tasks",
+                    "task finished",
+                    task = worker_task.id,
+                    tool = name,
+                    status = worker_task.status().as_str()
+                );
+            });
         if spawned.is_err() {
             return Err(McpError::internal("could not start task worker"));
         }
@@ -465,14 +633,23 @@ impl Core {
                 Status::Completed => return Ok(task.result().unwrap_or_else(Value::object)),
                 Status::Failed => {
                     let e = task.to_json(true)["error"].clone();
-                    return Err(McpError::new(e["code"].as_i64().unwrap_or(INTERNAL_ERROR), e["message"].as_str().unwrap_or("task failed")));
+                    return Err(McpError::new(
+                        e["code"].as_i64().unwrap_or(INTERNAL_ERROR),
+                        e["message"].as_str().unwrap_or("task failed"),
+                    ));
                 }
                 _ => {}
             }
         }
         let mut r = task.to_json(false);
         r.set("resultType", "task");
-        crate::log_info!("tasks", "tool call continues as task", task = task.id, tool = tool.name, principal = ctx.principal.id);
+        crate::log_info!(
+            "tasks",
+            "tool call continues as task",
+            task = task.id,
+            tool = tool.name,
+            principal = ctx.principal.id
+        );
         Ok(r)
     }
 
@@ -487,16 +664,26 @@ impl Core {
 
     fn list_templates(self: &Arc<Self>, ctx: &RequestContext, p: &Value) -> Res {
         let items = resources::list_templates(self, ctx);
-        self.list_result("resourceTemplates", items, p, 3_600_000, resources::list_scope(self))
+        self.list_result(
+            "resourceTemplates",
+            items,
+            p,
+            3_600_000,
+            resources::list_scope(self),
+        )
     }
 
     fn read_resource(self: &Arc<Self>, ctx: &RequestContext, p: &Value) -> Res {
-        let uri = p["uri"].as_str().ok_or_else(|| McpError::invalid_params("resources/read requires a string 'uri'"))?;
+        let uri = p["uri"]
+            .as_str()
+            .ok_or_else(|| McpError::invalid_params("resources/read requires a string 'uri'"))?;
         if uri.len() > 2048 {
             return Err(McpError::invalid_params("Resource not found: URI too long"));
         }
         let r = resources::read(self, uri, ctx)?;
-        Ok(Dispatched::Result(obj! { "contents" => r.contents, "ttlMs" => r.ttl_ms, "cacheScope" => r.cache_scope }))
+        Ok(Dispatched::Result(
+            obj! { "contents" => r.contents, "ttlMs" => r.ttl_ms, "cacheScope" => r.cache_scope },
+        ))
     }
 
     // -----------------------------------------------------------------------
@@ -504,18 +691,30 @@ impl Core {
     // -----------------------------------------------------------------------
 
     fn list_prompts(&self, ctx: &RequestContext, p: &Value) -> Res {
-        let items: Vec<Value> = prompts::visible(self, ctx, &self.prompts).into_iter().map(prompts::to_json).collect();
+        let items: Vec<Value> = prompts::visible(self, ctx, &self.prompts)
+            .into_iter()
+            .map(prompts::to_json)
+            .collect();
         self.list_result("prompts", items, p, 3_600_000, resources::list_scope(self))
     }
 
     fn get_prompt(self: &Arc<Self>, ctx: &RequestContext, p: &Value) -> Res {
-        let name = p["name"].as_str().ok_or_else(|| McpError::invalid_params("prompts/get requires a string 'name'"))?;
+        let name = p["name"]
+            .as_str()
+            .ok_or_else(|| McpError::invalid_params("prompts/get requires a string 'name'"))?;
         let visible = prompts::visible(self, ctx, &self.prompts);
-        let def = visible.into_iter().find(|d| d.name == name).ok_or_else(|| McpError::invalid_params(format!("Unknown prompt: {name}")))?;
+        let def = visible
+            .into_iter()
+            .find(|d| d.name == name)
+            .ok_or_else(|| McpError::invalid_params(format!("Unknown prompt: {name}")))?;
         let raw_args = match p.get("arguments") {
             None | Some(Value::Null) => Map::new(),
             Some(Value::Object(m)) => m.clone(),
-            Some(_) => return Err(McpError::invalid_params("'arguments' must be an object of strings")),
+            Some(_) => {
+                return Err(McpError::invalid_params(
+                    "'arguments' must be an object of strings",
+                ));
+            }
         };
         let mut args: BTreeMap<String, String> = BTreeMap::new();
         for (k, v) in raw_args.iter() {
@@ -523,15 +722,26 @@ impl Core {
                 Value::String(s) => {
                     args.insert(k.clone(), s.clone());
                 }
-                _ => return Err(McpError::invalid_params(format!("Prompt argument '{k}' must be a string"))),
+                _ => {
+                    return Err(McpError::invalid_params(format!(
+                        "Prompt argument '{k}' must be a string"
+                    )));
+                }
             }
         }
         let salient = obj! { "name" => name, "arguments" => Value::Object(raw_args) };
-        let binding = Binding { method: "prompts/get", salient: &salient, principal: &ctx.principal.id };
+        let binding = Binding {
+            method: "prompts/get",
+            salient: &salient,
+            principal: &ctx.principal.id,
+        };
         if let Some(Value::String(s)) = p.get("requestState") {
             let state = self.sealer.open(s, &binding)?;
             if state["step"].as_str() == Some("prompt_args") {
-                if let Some(resp) = p.get("inputResponses").and_then(|r| r.get("prompt_arguments")) {
+                if let Some(resp) = p
+                    .get("inputResponses")
+                    .and_then(|r| r.get("prompt_arguments"))
+                {
                     if resp["action"].as_str() == Some("accept") {
                         if let Some(content) = resp["content"].as_object() {
                             for (k, v) in content.iter() {
@@ -541,7 +751,9 @@ impl Core {
                             }
                         }
                     } else {
-                        return Err(McpError::invalid_params("Required prompt arguments were not provided"));
+                        return Err(McpError::invalid_params(
+                            "Required prompt arguments were not provided",
+                        ));
                     }
                 }
             }
@@ -551,10 +763,19 @@ impl Core {
             prompts::PromptOutcome::NeedArgs(missing) => {
                 if ctx.supports_elicitation_form() {
                     let requests = prompts::elicit_missing(def, &missing);
-                    let state = self.sealer.seal(&binding, obj! { "step" => "prompt_args" }, Duration::from_secs(600));
-                    Ok(Dispatched::Result(obj! { "resultType" => "input_required", "inputRequests" => Value::Object(requests), "requestState" => state }))
+                    let state = self.sealer.seal(
+                        &binding,
+                        obj! { "step" => "prompt_args" },
+                        Duration::from_secs(600),
+                    );
+                    Ok(Dispatched::Result(
+                        obj! { "resultType" => "input_required", "inputRequests" => Value::Object(requests), "requestState" => state },
+                    ))
                 } else {
-                    Err(McpError::invalid_params(format!("Missing required arguments: {}", missing.join(", "))))
+                    Err(McpError::invalid_params(format!(
+                        "Missing required arguments: {}",
+                        missing.join(", ")
+                    )))
                 }
             }
         }
@@ -566,27 +787,55 @@ impl Core {
 
     fn complete(self: &Arc<Self>, ctx: &RequestContext, p: &Value) -> Res {
         let r = &p["ref"];
-        let arg_name = p.at(&["argument", "name"]).as_str().ok_or_else(|| McpError::invalid_params("completion/complete requires argument.name"))?;
-        let value = p.at(&["argument", "value"]).as_str().ok_or_else(|| McpError::invalid_params("completion/complete requires argument.value"))?;
+        let arg_name = p.at(&["argument", "name"]).as_str().ok_or_else(|| {
+            McpError::invalid_params("completion/complete requires argument.name")
+        })?;
+        let value = p.at(&["argument", "value"]).as_str().ok_or_else(|| {
+            McpError::invalid_params("completion/complete requires argument.value")
+        })?;
         let known = match r["type"].as_str() {
             Some("ref/prompt") => {
-                let name = r["name"].as_str().ok_or_else(|| McpError::invalid_params("ref/prompt requires 'name'"))?;
-                let def = prompts::visible(self, ctx, &self.prompts).into_iter().find(|d| d.name == name).ok_or_else(|| McpError::invalid_params(format!("Unknown prompt: {name}")))?;
+                let name = r["name"]
+                    .as_str()
+                    .ok_or_else(|| McpError::invalid_params("ref/prompt requires 'name'"))?;
+                let def = prompts::visible(self, ctx, &self.prompts)
+                    .into_iter()
+                    .find(|d| d.name == name)
+                    .ok_or_else(|| McpError::invalid_params(format!("Unknown prompt: {name}")))?;
                 def.args.iter().any(|a| a.name == arg_name)
             }
             Some("ref/resource") => {
-                let uri = r["uri"].as_str().ok_or_else(|| McpError::invalid_params("ref/resource requires 'uri'"))?;
-                let tpl = resources::templates().into_iter().find(|t| t.template == uri);
+                let uri = r["uri"]
+                    .as_str()
+                    .ok_or_else(|| McpError::invalid_params("ref/resource requires 'uri'"))?;
+                let tpl = resources::templates()
+                    .into_iter()
+                    .find(|t| t.template == uri);
                 match tpl {
-                    Some(t) => crate::util::uritemplate::UriTemplate::parse(t.template).is_some_and(|u| u.variables().contains(&arg_name)),
+                    Some(t) => crate::util::uritemplate::UriTemplate::parse(t.template)
+                        .is_some_and(|u| u.variables().contains(&arg_name)),
                     None if resources::resolve(uri).is_some() => false,
-                    None => return Err(McpError::invalid_params(format!("Unknown resource or template: {uri}"))),
+                    None => {
+                        return Err(McpError::invalid_params(format!(
+                            "Unknown resource or template: {uri}"
+                        )));
+                    }
                 }
             }
-            _ => return Err(McpError::invalid_params("ref.type must be ref/prompt or ref/resource")),
+            _ => {
+                return Err(McpError::invalid_params(
+                    "ref.type must be ref/prompt or ref/resource",
+                ));
+            }
         };
-        let (values, total, has_more) = if known { completion::complete(self, ctx, arg_name, value) } else { (Vec::new(), 0, false) };
-        Ok(Dispatched::Result(obj! { "completion" => obj! { "values" => values, "total" => total, "hasMore" => has_more } }))
+        let (values, total, has_more) = if known {
+            completion::complete(self, ctx, arg_name, value)
+        } else {
+            (Vec::new(), 0, false)
+        };
+        Ok(Dispatched::Result(
+            obj! { "completion" => obj! { "values" => values, "total" => total, "hasMore" => has_more } },
+        ))
     }
 
     // -----------------------------------------------------------------------
@@ -594,15 +843,31 @@ impl Core {
     // -----------------------------------------------------------------------
 
     fn listen(self: &Arc<Self>, ctx: &RequestContext, p: &Value) -> Res {
-        let n = p.get("notifications").and_then(|v| v.as_object()).ok_or_else(|| McpError::invalid_params("subscriptions/listen requires a 'notifications' filter object"))?;
+        let n = p
+            .get("notifications")
+            .and_then(|v| v.as_object())
+            .ok_or_else(|| {
+                McpError::invalid_params(
+                    "subscriptions/listen requires a 'notifications' filter object",
+                )
+            })?;
         let flag = |k: &str| n.get(k).and_then(|v| v.as_bool()).unwrap_or(false);
-        let mut filter = Filter { tools_list_changed: flag("toolsListChanged"), prompts_list_changed: flag("promptsListChanged"), resources_list_changed: flag("resourcesListChanged"), ..Default::default() };
+        let mut filter = Filter {
+            tools_list_changed: flag("toolsListChanged"),
+            prompts_list_changed: flag("promptsListChanged"),
+            resources_list_changed: flag("resourcesListChanged"),
+            ..Default::default()
+        };
         if let Some(uris) = n.get("resourceSubscriptions") {
-            let list = uris.as_array().ok_or_else(|| McpError::invalid_params("resourceSubscriptions must be an array of URIs"))?;
+            let list = uris.as_array().ok_or_else(|| {
+                McpError::invalid_params("resourceSubscriptions must be an array of URIs")
+            })?;
             for u in list.iter().filter_map(|u| u.as_str()).take(200) {
                 let ok = match resources::resolve(u) {
                     Some(resources::Resolved::Static(s)) => resources::available(self, s.tool, ctx),
-                    Some(resources::Resolved::Template(t, vars)) => resources::available(self, t.tool, ctx) && (t.args)(&vars).is_ok(),
+                    Some(resources::Resolved::Template(t, vars)) => {
+                        resources::available(self, t.tool, ctx) && (t.args)(&vars).is_ok()
+                    }
                     _ => false,
                 };
                 if ok && !filter.resource_uris.iter().any(|x| x == u) {
@@ -610,18 +875,37 @@ impl Core {
                 }
             }
         }
-        let task_ids: Vec<String> = n.get("taskIds").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|t| t.as_str().map(String::from)).collect()).unwrap_or_default();
+        let task_ids: Vec<String> = n
+            .get("taskIds")
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|t| t.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
         if n.contains_key("taskIds") {
             if !ctx.supports_tasks() {
-                return Err(McpError::missing_capability(obj! { "extensions" => obj! { EXT_TASKS => obj! {} } }, "task status notifications require the tasks extension"));
+                return Err(McpError::missing_capability(
+                    obj! { "extensions" => obj! { EXT_TASKS => obj! {} } },
+                    "task status notifications require the tasks extension",
+                ));
             }
-            filter.task_ids = task_ids.into_iter().filter(|t| self.tasks.get(t, &ctx.principal.id).is_some()).collect();
+            filter.task_ids = task_ids
+                .into_iter()
+                .filter(|t| self.tasks.get(t, &ctx.principal.id).is_some())
+                .collect();
         }
         let id = ctx.id.clone().unwrap_or(Value::Null);
         let sub = Subscription::new(id, filter, &ctx.principal.id, ctx.sink.clone());
         sub.acknowledge(ctx.supports_tasks());
         self.hub.add(sub.clone());
-        crate::log_info!("subscriptions", "subscription opened", principal = ctx.principal.id, filter = sub.filter.to_json(true));
+        crate::log_info!(
+            "subscriptions",
+            "subscription opened",
+            principal = ctx.principal.id,
+            filter = sub.filter.to_json(true)
+        );
         // Prime change detection so the first notification reflects a real change.
         self.prime_watch(&sub.filter);
         Ok(Dispatched::Subscription(sub))
@@ -633,14 +917,28 @@ impl Core {
 
     fn task_method(&self, ctx: &RequestContext, p: &Value) -> Res {
         if !ctx.supports_tasks() {
-            return Err(McpError::missing_capability(obj! { "extensions" => obj! { EXT_TASKS => obj! {} } }, "the tasks extension"));
+            return Err(McpError::missing_capability(
+                obj! { "extensions" => obj! { EXT_TASKS => obj! {} } },
+                "the tasks extension",
+            ));
         }
-        let id = p["taskId"].as_str().ok_or_else(|| McpError::invalid_params("taskId is required"))?;
-        let task = self.tasks.get(id, &ctx.principal.id).ok_or_else(|| McpError::invalid_params(format!("Unknown or expired task: {id}")))?;
+        let id = p["taskId"]
+            .as_str()
+            .ok_or_else(|| McpError::invalid_params("taskId is required"))?;
+        let task = self
+            .tasks
+            .get(id, &ctx.principal.id)
+            .ok_or_else(|| McpError::invalid_params(format!("Unknown or expired task: {id}")))?;
         match ctx.method.as_str() {
             "tasks/get" => Ok(Dispatched::Result(task.to_json(true))),
             "tasks/update" => {
-                let responses = p.get("inputResponses").and_then(|v| v.as_object()).filter(|m| m.values().all(|v| v.is_object())).ok_or_else(|| McpError::invalid_params("tasks/update requires an 'inputResponses' object"))?;
+                let responses = p
+                    .get("inputResponses")
+                    .and_then(|v| v.as_object())
+                    .filter(|m| m.values().all(|v| v.is_object()))
+                    .ok_or_else(|| {
+                        McpError::invalid_params("tasks/update requires an 'inputResponses' object")
+                    })?;
                 task.update_inputs(responses);
                 Ok(Dispatched::Result(Value::object()))
             }
@@ -662,12 +960,20 @@ impl Core {
 
     fn current_tools_hash(&self) -> String {
         let admin = Principal::local();
-        Self::names_hash(self.visible_tools(&admin).iter().map(|t| t.name.to_string()))
+        Self::names_hash(
+            self.visible_tools(&admin)
+                .iter()
+                .map(|t| t.name.to_string()),
+        )
     }
 
     fn current_prompts_hash(self: &Arc<Self>) -> String {
         let ctx = self.internal_ctx();
-        Self::names_hash(prompts::visible(self, &ctx, &self.prompts).iter().map(|p| p.name.to_string()))
+        Self::names_hash(
+            prompts::visible(self, &ctx, &self.prompts)
+                .iter()
+                .map(|p| p.name.to_string()),
+        )
     }
 
     fn current_resource_list_hash(self: &Arc<Self>) -> String {
@@ -692,7 +998,11 @@ impl Core {
                 new_hashes.push((u, r.hash));
             }
         }
-        let list_hash = if filter.resources_list_changed { Some(self.current_resource_list_hash()) } else { None };
+        let list_hash = if filter.resources_list_changed {
+            Some(self.current_resource_list_hash())
+        } else {
+            None
+        };
         let mut w = self.watch_state.lock().unwrap_or_else(|e| e.into_inner());
         for (u, h) in new_hashes {
             w.resource_hashes.entry(u).or_insert(h);
@@ -705,7 +1015,11 @@ impl Core {
         }
         drop(w);
         let ph = self.current_prompts_hash();
-        self.watch_state.lock().unwrap_or_else(|e| e.into_inner()).prompts_hash.get_or_insert(ph);
+        self.watch_state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .prompts_hash
+            .get_or_insert(ph);
     }
 
     /// One pass of change detection. Public for tests.
@@ -717,7 +1031,8 @@ impl Core {
             let mtime = std::fs::metadata(path).and_then(|m| m.modified()).ok();
             let changed = {
                 let mut w = self.watch_state.lock().unwrap_or_else(|e| e.into_inner());
-                let changed = w.config_mtime.is_some() && mtime.is_some() && w.config_mtime != mtime;
+                let changed =
+                    w.config_mtime.is_some() && mtime.is_some() && w.config_mtime != mtime;
                 if mtime.is_some() {
                     w.config_mtime = mtime;
                 }
@@ -731,7 +1046,11 @@ impl Core {
                         }
                         crate::log_info!("config", "configuration reloaded", path = path.display());
                     }
-                    Err(e) => crate::log_error!("config", "configuration reload failed; keeping previous settings", error = e),
+                    Err(e) => crate::log_error!(
+                        "config",
+                        "configuration reload failed; keeping previous settings",
+                        error = e
+                    ),
                 }
             }
         }
@@ -776,7 +1095,9 @@ impl Core {
             if self.stop.load(Ordering::Relaxed) {
                 return;
             }
-            let Ok(r) = resources::read(self, &uri, &ctx) else { continue };
+            let Ok(r) = resources::read(self, &uri, &ctx) else {
+                continue;
+            };
             let changed = {
                 let mut w = self.watch_state.lock().unwrap_or_else(|e| e.into_inner());
                 let prev = w.resource_hashes.insert(uri.clone(), r.hash.clone());
@@ -799,20 +1120,26 @@ impl Core {
             }
         }
         let core = self.clone();
-        let _ = std::thread::Builder::new().name("mcp-watch".into()).spawn(move || {
-            let mut elapsed = Duration::ZERO;
-            while !core.stop.load(Ordering::Relaxed) {
-                std::thread::sleep(Duration::from_millis(250));
-                elapsed += Duration::from_millis(250);
-                if elapsed >= Duration::from_secs(core.config.get().watch_interval_secs) {
-                    elapsed = Duration::ZERO;
-                    let c = core.clone();
-                    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || c.watch_tick())).is_err() {
-                        crate::log_error!("mcp", "watcher iteration panicked");
+        let _ = std::thread::Builder::new()
+            .name("mcp-watch".into())
+            .spawn(move || {
+                let mut elapsed = Duration::ZERO;
+                while !core.stop.load(Ordering::Relaxed) {
+                    std::thread::sleep(Duration::from_millis(250));
+                    elapsed += Duration::from_millis(250);
+                    if elapsed >= Duration::from_secs(core.config.get().watch_interval_secs) {
+                        elapsed = Duration::ZERO;
+                        let c = core.clone();
+                        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                            c.watch_tick()
+                        }))
+                        .is_err()
+                        {
+                            crate::log_error!("mcp", "watcher iteration panicked");
+                        }
                     }
                 }
-            }
-        });
+            });
     }
 
     /// Graceful shutdown: end subscriptions, cancel tasks, persist the cache.
@@ -840,25 +1167,110 @@ impl Core {
         let s = &self.stats;
         let mut out = String::new();
         let mut metric = |name: &str, help: &str, kind: &str, value: String| {
-            out.push_str(&format!("# HELP {name} {help}\n# TYPE {name} {kind}\n{name} {value}\n"));
+            out.push_str(&format!(
+                "# HELP {name} {help}\n# TYPE {name} {kind}\n{name} {value}\n"
+            ));
         };
-        metric("steam_mcp_uptime_seconds", "Seconds since start", "gauge", self.started.elapsed().as_secs().to_string());
-        metric("steam_mcp_requests_total", "JSON-RPC requests received", "counter", s.requests.load(Ordering::Relaxed).to_string());
-        metric("steam_mcp_request_errors_total", "JSON-RPC error responses", "counter", s.errors.load(Ordering::Relaxed).to_string());
-        metric("steam_mcp_tool_calls_total", "tools/call requests", "counter", s.tool_calls.load(Ordering::Relaxed).to_string());
-        metric("steam_mcp_tool_errors_total", "Tool results with isError", "counter", s.tool_errors.load(Ordering::Relaxed).to_string());
-        metric("steam_mcp_tasks_created_total", "Tasks created", "counter", s.tasks_created.load(Ordering::Relaxed).to_string());
-        metric("steam_mcp_tasks_active", "Tasks retained", "gauge", self.tasks.len().to_string());
-        metric("steam_mcp_subscriptions_active", "Open subscriptions/listen streams", "gauge", self.hub.len().to_string());
-        metric("steam_mcp_cache_entries", "Cache entries", "gauge", c["entries"].to_string());
-        metric("steam_mcp_cache_bytes", "Approximate cache bytes", "gauge", c["approxBytes"].to_string());
-        for (k, name) in [("hits", "hits"), ("staleHits", "stale_hits"), ("misses", "misses"), ("coalesced", "coalesced"), ("staleOnError", "stale_on_error"), ("evictions", "evictions"), ("backgroundRefreshes", "refreshes")] {
-            metric(&format!("steam_mcp_cache_{name}_total"), &format!("Cache {k}"), "counter", c[k].to_string());
+        metric(
+            "steam_mcp_uptime_seconds",
+            "Seconds since start",
+            "gauge",
+            self.started.elapsed().as_secs().to_string(),
+        );
+        metric(
+            "steam_mcp_requests_total",
+            "JSON-RPC requests received",
+            "counter",
+            s.requests.load(Ordering::Relaxed).to_string(),
+        );
+        metric(
+            "steam_mcp_request_errors_total",
+            "JSON-RPC error responses",
+            "counter",
+            s.errors.load(Ordering::Relaxed).to_string(),
+        );
+        metric(
+            "steam_mcp_tool_calls_total",
+            "tools/call requests",
+            "counter",
+            s.tool_calls.load(Ordering::Relaxed).to_string(),
+        );
+        metric(
+            "steam_mcp_tool_errors_total",
+            "Tool results with isError",
+            "counter",
+            s.tool_errors.load(Ordering::Relaxed).to_string(),
+        );
+        metric(
+            "steam_mcp_tasks_created_total",
+            "Tasks created",
+            "counter",
+            s.tasks_created.load(Ordering::Relaxed).to_string(),
+        );
+        metric(
+            "steam_mcp_tasks_active",
+            "Tasks retained",
+            "gauge",
+            self.tasks.len().to_string(),
+        );
+        metric(
+            "steam_mcp_subscriptions_active",
+            "Open subscriptions/listen streams",
+            "gauge",
+            self.hub.len().to_string(),
+        );
+        metric(
+            "steam_mcp_cache_entries",
+            "Cache entries",
+            "gauge",
+            c["entries"].to_string(),
+        );
+        metric(
+            "steam_mcp_cache_bytes",
+            "Approximate cache bytes",
+            "gauge",
+            c["approxBytes"].to_string(),
+        );
+        for (k, name) in [
+            ("hits", "hits"),
+            ("staleHits", "stale_hits"),
+            ("misses", "misses"),
+            ("coalesced", "coalesced"),
+            ("staleOnError", "stale_on_error"),
+            ("evictions", "evictions"),
+            ("backgroundRefreshes", "refreshes"),
+        ] {
+            metric(
+                &format!("steam_mcp_cache_{name}_total"),
+                &format!("Cache {k}"),
+                "counter",
+                c[k].to_string(),
+            );
         }
-        metric("steam_mcp_upstream_calls_total", "Calls made to Steam", "counter", u["upstreamCalls"].to_string());
-        metric("steam_mcp_upstream_errors_total", "Failed calls to Steam", "counter", u["upstreamErrors"].to_string());
-        metric("steam_mcp_upstream_avg_latency_ms", "Mean upstream latency", "gauge", u["avgLatencyMs"].to_string());
-        metric("steam_mcp_upstream_daily_budget_used", "Upstream calls today", "gauge", u["dailyBudgetUsed"].to_string());
+        metric(
+            "steam_mcp_upstream_calls_total",
+            "Calls made to Steam",
+            "counter",
+            u["upstreamCalls"].to_string(),
+        );
+        metric(
+            "steam_mcp_upstream_errors_total",
+            "Failed calls to Steam",
+            "counter",
+            u["upstreamErrors"].to_string(),
+        );
+        metric(
+            "steam_mcp_upstream_avg_latency_ms",
+            "Mean upstream latency",
+            "gauge",
+            u["avgLatencyMs"].to_string(),
+        );
+        metric(
+            "steam_mcp_upstream_daily_budget_used",
+            "Upstream calls today",
+            "gauge",
+            u["dailyBudgetUsed"].to_string(),
+        );
         out
     }
 

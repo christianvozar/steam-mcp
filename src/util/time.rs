@@ -4,7 +4,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Milliseconds since the Unix epoch.
 pub fn now_ms() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 /// Seconds since the Unix epoch.
@@ -56,7 +59,12 @@ pub fn iso8601_secs(secs: u64) -> String {
     let s = secs as i64;
     let (y, mo, d) = civil_from_days(s.div_euclid(86_400));
     let rem = s.rem_euclid(86_400);
-    format!("{y:04}-{mo:02}-{d:02}T{:02}:{:02}:{:02}Z", rem / 3600, (rem % 3600) / 60, rem % 60)
+    format!(
+        "{y:04}-{mo:02}-{d:02}T{:02}:{:02}:{:02}Z",
+        rem / 3600,
+        (rem % 3600) / 60,
+        rem % 60
+    )
 }
 
 /// Formats Unix seconds as a calendar date `YYYY-MM-DD`.
@@ -75,7 +83,11 @@ pub fn parse_datetime(s: &str) -> Option<u64> {
     }
     let num = |r: std::ops::Range<usize>| -> Option<u32> {
         let t = s.get(r)?;
-        if t.bytes().all(|c| c.is_ascii_digit()) { t.parse().ok() } else { None }
+        if t.bytes().all(|c| c.is_ascii_digit()) {
+            t.parse().ok()
+        } else {
+            None
+        }
     };
     let y = num(0..4)? as i64;
     if !(b[4] == b'-' || b[4] == b'/') || b[7] != b[4] {
@@ -143,8 +155,14 @@ mod tests {
         assert_eq!(iso8601_secs(1_785_196_800), "2026-07-28T00:00:00Z");
         assert_eq!(parse_datetime("2026-07-28"), Some(1_785_196_800));
         assert_eq!(parse_datetime("2026/07/28"), Some(1_785_196_800));
-        assert_eq!(parse_datetime("2026-07-28T01:02:03Z"), Some(1_785_196_800 + 3723));
-        assert_eq!(parse_datetime("2026-07-28T01:02:03.456+01:00"), Some(1_785_196_800 + 123));
+        assert_eq!(
+            parse_datetime("2026-07-28T01:02:03Z"),
+            Some(1_785_196_800 + 3723)
+        );
+        assert_eq!(
+            parse_datetime("2026-07-28T01:02:03.456+01:00"),
+            Some(1_785_196_800 + 123)
+        );
         assert_eq!(parse_datetime("2024-02-30"), None);
         assert_eq!(parse_datetime("2024-02-29"), Some(1_709_164_800));
         assert_eq!(parse_datetime("nope"), None);

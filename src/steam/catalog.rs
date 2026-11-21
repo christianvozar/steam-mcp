@@ -16,11 +16,14 @@ pub struct CatalogEntry {
     norm: String,
 }
 
+/// A built index tagged with the hash of the catalog it came from.
+type BuiltIndex = (Arc<str>, Arc<Vec<CatalogEntry>>);
+
 /// In-memory search index derived from the cached catalog, rebuilt when the
 /// cached value's hash changes.
 #[derive(Default)]
 pub struct CatalogIndex {
-    built: Mutex<Option<(Arc<str>, Arc<Vec<CatalogEntry>>)>>,
+    built: Mutex<Option<BuiltIndex>>,
 }
 
 /// Lowercases and replaces punctuation with spaces, collapsing runs.
@@ -28,7 +31,11 @@ pub fn normalize(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut last_space = true;
     for c in s.chars() {
-        let c = if c.is_alphanumeric() { c.to_lowercase().next().unwrap_or(c) } else { ' ' };
+        let c = if c.is_alphanumeric() {
+            c.to_lowercase().next().unwrap_or(c)
+        } else {
+            ' '
+        };
         if c == ' ' {
             if !last_space {
                 out.push(' ');
@@ -48,7 +55,10 @@ fn fetch_catalog(client: &Arc<SteamClient>) -> Result<Fetched, FetchError> {
     let to_fetch = |e: SteamError| FetchError {
         message: e.message,
         status: e.status,
-        transient: matches!(e.kind, ErrorKind::Network | ErrorKind::RateLimited | ErrorKind::Upstream),
+        transient: matches!(
+            e.kind,
+            ErrorKind::Network | ErrorKind::RateLimited | ErrorKind::Upstream
+        ),
     };
     let mut apps: Vec<Value> = Vec::new();
     let source;
@@ -57,14 +67,19 @@ fn fetch_catalog(client: &Arc<SteamClient>) -> Result<Fetched, FetchError> {
         source = "IStoreService/GetAppList";
         let mut last_appid: u64 = 0;
         for _page in 0..40 {
-            let call = Call::get(Host::Public, "/IStoreService/GetAppList/v1/", KeyKind::Public, "static")
-                .param("include_games", "true")
-                .param("include_dlc", "true")
-                .param("include_software", "true")
-                .param("include_videos", "false")
-                .param("include_hardware", "true")
-                .param("max_results", 50_000)
-                .opt_param("last_appid", (last_appid > 0).then_some(last_appid));
+            let call = Call::get(
+                Host::Public,
+                "/IStoreService/GetAppList/v1/",
+                KeyKind::Public,
+                "static",
+            )
+            .param("include_games", "true")
+            .param("include_dlc", "true")
+            .param("include_software", "true")
+            .param("include_videos", "false")
+            .param("include_hardware", "true")
+            .param("max_results", 50_000)
+            .opt_param("last_appid", (last_appid > 0).then_some(last_appid));
             let v = client.call_uncached(&call).map_err(to_fetch)?;
             let resp = &v["response"];
             if let Some(list) = resp["apps"].as_array() {
@@ -74,14 +89,22 @@ fn fetch_catalog(client: &Arc<SteamClient>) -> Result<Fetched, FetchError> {
                     }
                 }
             }
-            match (resp["have_more_results"].as_bool(), resp["last_appid"].as_u64()) {
+            match (
+                resp["have_more_results"].as_bool(),
+                resp["last_appid"].as_u64(),
+            ) {
                 (Some(true), Some(next)) if next > last_appid => last_appid = next,
                 _ => break,
             }
         }
     } else {
         source = "ISteamApps/GetAppList";
-        let call = Call::get(Host::Public, "/ISteamApps/GetAppList/v2/", KeyKind::None, "static");
+        let call = Call::get(
+            Host::Public,
+            "/ISteamApps/GetAppList/v2/",
+            KeyKind::None,
+            "static",
+        );
         let v = client.call_uncached(&call).map_err(to_fetch)?;
         if let Some(list) = v.at(&["applist", "apps"]).as_array() {
             for a in list {
@@ -94,7 +117,11 @@ fn fetch_catalog(client: &Arc<SteamClient>) -> Result<Fetched, FetchError> {
         }
     }
     if apps.is_empty() {
-        return Err(FetchError { message: "Steam returned an empty app catalog".into(), status: Some(502), transient: true });
+        return Err(FetchError {
+            message: "Steam returned an empty app catalog".into(),
+            status: Some(502),
+            transient: true,
+        });
     }
     Ok(Fetched::Value(crate::obj! {
         "source" => source,
@@ -106,15 +133,26 @@ fn fetch_catalog(client: &Arc<SteamClient>) -> Result<Fetched, FetchError> {
 
 impl SteamClient {
     /// Returns the (cached) catalog lookup and its search index.
-    pub fn catalog(self: &Arc<Self>, force_refresh: bool) -> Result<(Lookup, Arc<Vec<CatalogEntry>>), SteamError> {
+    pub fn catalog(
+        self: &Arc<Self>,
+        force_refresh: bool,
+    ) -> Result<(Lookup, Arc<Vec<CatalogEntry>>), SteamError> {
         let cfg = self.config();
         let policy = cfg.policy("static");
         let this = self.clone();
         let fetch: FetchFn = Arc::new(move || fetch_catalog(&this));
-        let scope = cfg.public_key().map(|k| k.fingerprint()).unwrap_or_else(|| "-".into());
+        let scope = cfg
+            .public_key()
+            .map(|k| k.fingerprint())
+            .unwrap_or_else(|| "-".into());
         let lookup = self
             .cache
-            .get_or_fetch(&format!("{CATALOG_KEY}|public:{scope}"), &policy, force_refresh, fetch)
+            .get_or_fetch(
+                &format!("{CATALOG_KEY}|public:{scope}"),
+                &policy,
+                force_refresh,
+                fetch,
+            )
             .map_err(SteamError::from_fetch)?;
         let index = self.catalog.index_for(&lookup);
         Ok((lookup, index))
@@ -123,7 +161,10 @@ impl SteamClient {
     /// Catalog index only if already cached (never blocks on upstream).
     pub fn catalog_if_cached(self: &Arc<Self>) -> Option<Arc<Vec<CatalogEntry>>> {
         let cfg = self.config();
-        let scope = cfg.public_key().map(|k| k.fingerprint()).unwrap_or_else(|| "-".into());
+        let scope = cfg
+            .public_key()
+            .map(|k| k.fingerprint())
+            .unwrap_or_else(|| "-".into());
         let lookup = self.cache.peek(&format!("{CATALOG_KEY}|public:{scope}"))?;
         Some(self.catalog.index_for(&lookup))
     }
@@ -144,7 +185,11 @@ impl CatalogIndex {
                     .filter_map(|pair| {
                         let id = pair[0].as_u64()?;
                         let name = pair[1].as_str()?.to_string();
-                        Some(CatalogEntry { appid: id, norm: normalize(&name), name })
+                        Some(CatalogEntry {
+                            appid: id,
+                            norm: normalize(&name),
+                            name,
+                        })
                     })
                     .collect()
             })
@@ -188,8 +233,16 @@ pub fn search(index: &[CatalogEntry], query: &str, limit: usize) -> Vec<(Catalog
         };
         scored.push((score, e));
     }
-    scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.name.len().cmp(&b.1.name.len())).then(a.1.appid.cmp(&b.1.appid)));
-    scored.into_iter().take(limit).map(|(s, e)| (e.clone(), s)).collect()
+    scored.sort_by(|a, b| {
+        b.0.cmp(&a.0)
+            .then(a.1.name.len().cmp(&b.1.name.len()))
+            .then(a.1.appid.cmp(&b.1.appid))
+    });
+    scored
+        .into_iter()
+        .take(limit)
+        .map(|(s, e)| (e.clone(), s))
+        .collect()
 }
 
 #[cfg(test)]
@@ -197,7 +250,11 @@ mod tests {
     use super::*;
 
     fn entry(id: u64, name: &str) -> CatalogEntry {
-        CatalogEntry { appid: id, name: name.into(), norm: normalize(name) }
+        CatalogEntry {
+            appid: id,
+            name: name.into(),
+            norm: normalize(name),
+        }
     }
 
     #[test]

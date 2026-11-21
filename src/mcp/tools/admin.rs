@@ -7,15 +7,21 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use super::*;
-use crate::try_steam;
 use crate::mcp::context::{Transport, scopes};
 use crate::steam::{Call, Host, KeyKind};
+use crate::try_steam;
 use crate::util::encoding::pct_decode;
 
 fn cache_stats(env: &ToolEnv, _args: &Map) -> ToolOutcome {
     let cache = env.steam().cache.stats_json();
     let upstream = env.steam().stats_json();
-    let ns: Map = env.steam().cache.key_namespaces().into_iter().map(|(k, v)| (k, Value::from(v))).collect();
+    let ns: Map = env
+        .steam()
+        .cache
+        .key_namespaces()
+        .into_iter()
+        .map(|(k, v)| (k, Value::from(v)))
+        .collect();
     let text = format!(
         "Cache: {} entries (~{} KiB), hit ratio {:.1}%, {} upstream calls ({} errors), {} of {} daily budget used.",
         cache["entries"],
@@ -26,8 +32,17 @@ fn cache_stats(env: &ToolEnv, _args: &Map) -> ToolOutcome {
         upstream["dailyBudgetUsed"],
         upstream["dailyBudget"]
     );
-    let ttl: Map = env.cfg().ttl.iter().map(|(k, (t, s))| (k.clone(), obj! { "ttlSeconds" => *t, "staleSeconds" => *s })).collect();
-    ok_result(text, obj! { "cache" => cache, "upstream" => upstream, "namespaces" => Value::Object(ns), "ttlClasses" => Value::Object(ttl) }, &[])
+    let ttl: Map = env
+        .cfg()
+        .ttl
+        .iter()
+        .map(|(k, (t, s))| (k.clone(), obj! { "ttlSeconds" => *t, "staleSeconds" => *s }))
+        .collect();
+    ok_result(
+        text,
+        obj! { "cache" => cache, "upstream" => upstream, "namespaces" => Value::Object(ns), "ttlClasses" => Value::Object(ttl) },
+        &[],
+    )
 }
 
 fn cache_invalidate(env: &ToolEnv, args: &Map) -> ToolOutcome {
@@ -36,39 +51,73 @@ fn cache_invalidate(env: &ToolEnv, args: &Map) -> ToolOutcome {
     let removed = match scope {
         "all" => cache.clear(),
         "app" => {
-            let Some(appid) = arg_u64(args, "appid") else { return tool_error("scope=app requires 'appid'.") };
-            let needles = [format!("appid={appid}"), format!("appids={appid}"), format!("gameid={appid}"), format!("/appreviews/{appid}?")];
+            let Some(appid) = arg_u64(args, "appid") else {
+                return tool_error("scope=app requires 'appid'.");
+            };
+            let needles = [
+                format!("appid={appid}"),
+                format!("appids={appid}"),
+                format!("gameid={appid}"),
+                format!("/appreviews/{appid}?"),
+            ];
             cache.invalidate_where(|k| needles.iter().any(|n| k.contains(n.as_str())))
         }
         "player" => {
-            let Some(id) = arg_str(args, "steamid") else { return tool_error("scope=player requires 'steamid'.") };
+            let Some(id) = arg_str(args, "steamid") else {
+                return tool_error("scope=player requires 'steamid'.");
+            };
             let id = id.to_string();
             cache.invalidate_where(|k| k.contains(&id))
         }
         "prefix" => {
-            let Some(p) = arg_str(args, "prefix") else { return tool_error("scope=prefix requires 'prefix'.") };
+            let Some(p) = arg_str(args, "prefix") else {
+                return tool_error("scope=prefix requires 'prefix'.");
+            };
             let p = p.to_string();
             cache.invalidate_where(|k| k.starts_with(&p))
         }
         "catalog" => cache.invalidate_where(|k| k.starts_with("catalog:")),
         other => return tool_error(format!("Unknown scope '{other}'.")),
     };
-    crate::log_info!("audit", "cache invalidated", scope = scope, removed = removed, principal = env.ctx.principal.id);
-    ok_result(format!("Invalidated {removed} cache entr{} (scope {scope}).", if removed == 1 { "y" } else { "ies" }), obj! { "scope" => scope, "removed" => removed }, &[])
+    crate::log_info!(
+        "audit",
+        "cache invalidated",
+        scope = scope,
+        removed = removed,
+        principal = env.ctx.principal.id
+    );
+    ok_result(
+        format!(
+            "Invalidated {removed} cache entr{} (scope {scope}).",
+            if removed == 1 { "y" } else { "ies" }
+        ),
+        obj! { "scope" => scope, "removed" => removed },
+        &[],
+    )
 }
 
 /// Method-name prefixes that indicate state changes; refused by the passthrough.
-const WRITE_VERBS: &[&str] = &["Set", "Grant", "Revoke", "Add", "Delete", "Remove", "Update", "Report", "Finalize", "Consume", "Exchange", "Modify", "Post", "Publish", "Ban", "Unban", "Init", "Refund", "Cancel", "Create", "Trigger", "Adjust", "Request", "Upload"];
+const WRITE_VERBS: &[&str] = &[
+    "Set", "Grant", "Revoke", "Add", "Delete", "Remove", "Update", "Report", "Finalize", "Consume",
+    "Exchange", "Modify", "Post", "Publish", "Ban", "Unban", "Init", "Refund", "Cancel", "Create",
+    "Trigger", "Adjust", "Request", "Upload",
+];
 
 fn api_call(env: &ToolEnv, args: &Map) -> ToolOutcome {
     let iface = arg_str(args, "interface").unwrap_or("");
     let method = arg_str(args, "method").unwrap_or("");
-    let ident = |s: &str| !s.is_empty() && s.len() <= 64 && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_');
+    let ident = |s: &str| {
+        !s.is_empty() && s.len() <= 64 && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+    };
     if !ident(iface) || !ident(method) {
-        return tool_error("'interface' and 'method' must be Web API identifiers such as ISteamNews and GetNewsForApp.");
+        return tool_error(
+            "'interface' and 'method' must be Web API identifiers such as ISteamNews and GetNewsForApp.",
+        );
     }
     if WRITE_VERBS.iter().any(|v| method.starts_with(v)) {
-        return tool_error(format!("'{method}' looks state-changing; the passthrough only performs read-only GET calls. Use a dedicated tool instead."));
+        return tool_error(format!(
+            "'{method}' looks state-changing; the passthrough only performs read-only GET calls. Use a dedicated tool instead."
+        ));
     }
     let version = arg_u64(args, "version").unwrap_or(1).clamp(1, 99);
     let partner = arg_str(args, "host") == Some("partner");
@@ -80,7 +129,11 @@ fn api_call(env: &ToolEnv, args: &Map) -> ToolOutcome {
         "volatile" => "volatile",
         _ => "short",
     };
-    let (host, key) = if partner { (Host::Partner, KeyKind::Publisher) } else { (Host::Public, KeyKind::Optional) };
+    let (host, key) = if partner {
+        (Host::Partner, KeyKind::Publisher)
+    } else {
+        (Host::Public, KeyKind::Optional)
+    };
     let mut call = Call::get(host, &format!("/{iface}/{method}/v{version}/"), key, ttl);
     if let Some(Value::Object(params)) = args.get("params") {
         for (k, v) in params.iter() {
@@ -100,10 +153,16 @@ fn api_call(env: &ToolEnv, args: &Map) -> ToolOutcome {
     }
     let l = try_steam!(env.steam().call(&call, force(args)));
     if l.negative {
-        return tool_error(format!("{iface}/{method}/v{version} returned no data (unknown method/version or empty response)."));
+        return tool_error(format!(
+            "{iface}/{method}/v{version} returned no data (unknown method/version or empty response)."
+        ));
     }
     let text = crate::util::truncate(&l.value.to_string(), 200);
-    ok_result(format!("{iface}/{method}/v{version} on {}: {text}", host.as_str()), (*l.value).clone(), &[&l])
+    ok_result(
+        format!("{iface}/{method}/v{version} on {}: {text}", host.as_str()),
+        (*l.value).clone(),
+        &[&l],
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -111,8 +170,15 @@ fn api_call(env: &ToolEnv, args: &Map) -> ToolOutcome {
 // ---------------------------------------------------------------------------
 
 fn sanitize_filename(name: &str) -> Option<String> {
-    let n: String = name.chars().filter(|c| c.is_ascii_alphanumeric() || "._-".contains(*c)).collect();
-    if n.is_empty() || n.starts_with('.') || n.len() > 120 || n != name { None } else { Some(n) }
+    let n: String = name
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || "._-".contains(*c))
+        .collect();
+    if n.is_empty() || n.starts_with('.') || n.len() > 120 || n != name {
+        None
+    } else {
+        Some(n)
+    }
 }
 
 fn root_to_path(uri: &str) -> Option<PathBuf> {
@@ -149,7 +215,11 @@ fn flatten(prefix: &str, v: &Value, out: &mut BTreeMap<String, String>) {
     match v {
         Value::Object(m) if prefix.matches('.').count() < 2 => {
             for (k, val) in m.iter() {
-                let key = if prefix.is_empty() { k.clone() } else { format!("{prefix}.{k}") };
+                let key = if prefix.is_empty() {
+                    k.clone()
+                } else {
+                    format!("{prefix}.{k}")
+                };
                 flatten(&key, val, out);
             }
         }
@@ -160,26 +230,44 @@ fn flatten(prefix: &str, v: &Value, out: &mut BTreeMap<String, String>) {
             out.insert(prefix.to_string(), s.clone());
         }
         other => {
-            out.insert(prefix.to_string(), if other.is_object() || other.is_array() { other.to_string() } else { other.to_param_string() });
+            out.insert(
+                prefix.to_string(),
+                if other.is_object() || other.is_array() {
+                    other.to_string()
+                } else {
+                    other.to_param_string()
+                },
+            );
         }
     }
 }
 
 fn csv_escape(s: &str) -> String {
     // Neutralise spreadsheet formula injection, then quote if needed.
-    let s = if s.starts_with(['=', '+', '-', '@']) && s.parse::<f64>().is_err() { format!("'{s}") } else { s.to_string() };
-    if s.contains([',', '"', '\n', '\r']) { format!("\"{}\"", s.replace('"', "\"\"")) } else { s }
+    let s = if s.starts_with(['=', '+', '-', '@']) && s.parse::<f64>().is_err() {
+        format!("'{s}")
+    } else {
+        s.to_string()
+    };
+    if s.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s
+    }
 }
 
 pub fn to_csv(rows: &[Value]) -> String {
-    let flat: Vec<BTreeMap<String, String>> = rows.iter().map(|r| {
-        let mut m = BTreeMap::new();
-        flatten("", r, &mut m);
-        if !r.is_object() {
-            m.insert("value".into(), r.to_param_string());
-        }
-        m
-    }).collect();
+    let flat: Vec<BTreeMap<String, String>> = rows
+        .iter()
+        .map(|r| {
+            let mut m = BTreeMap::new();
+            flatten("", r, &mut m);
+            if !r.is_object() {
+                m.insert("value".into(), r.to_param_string());
+            }
+            m
+        })
+        .collect();
     let mut cols: Vec<String> = Vec::new();
     for m in flat.iter().take(500) {
         for k in m.keys() {
@@ -188,10 +276,17 @@ pub fn to_csv(rows: &[Value]) -> String {
             }
         }
     }
-    let mut out = cols.iter().map(|c| csv_escape(c)).collect::<Vec<_>>().join(",");
+    let mut out = cols
+        .iter()
+        .map(|c| csv_escape(c))
+        .collect::<Vec<_>>()
+        .join(",");
     out.push('\n');
     for m in &flat {
-        let line: Vec<String> = cols.iter().map(|c| csv_escape(m.get(c).map(String::as_str).unwrap_or(""))).collect();
+        let line: Vec<String> = cols
+            .iter()
+            .map(|c| csv_escape(m.get(c).map(String::as_str).unwrap_or("")))
+            .collect();
         out.push_str(&line.join(","));
         out.push('\n');
     }
@@ -200,53 +295,102 @@ pub fn to_csv(rows: &[Value]) -> String {
 
 fn export_report(env: &ToolEnv, args: &Map) -> ToolOutcome {
     if env.ctx.transport == Transport::Http {
-        return tool_error("export_report writes to the local filesystem and is only available over the stdio transport.");
+        return tool_error(
+            "export_report writes to the local filesystem and is only available over the stdio transport.",
+        );
     }
     let tool_name = arg_str(args, "tool").unwrap_or("");
     let tools = all_tools();
     let Some(inner) = tools.iter().find(|t| t.name == tool_name) else {
         return tool_error(format!("Unknown tool '{tool_name}'."));
     };
-    if !inner.hints.read_only || inner.write || inner.name == "export_report" || inner.name == "steam_summarize_reviews" {
-        return tool_error(format!("'{tool_name}' cannot be exported; only read-only data tools are supported."));
+    if !inner.hints.read_only
+        || inner.write
+        || inner.name == "export_report"
+        || inner.name == "steam_summarize_reviews"
+    {
+        return tool_error(format!(
+            "'{tool_name}' cannot be exported; only read-only data tools are supported."
+        ));
     }
     if !env.ctx.principal.has_scope(inner.scope) {
         return tool_error(format!("'{tool_name}' requires scope {}.", inner.scope));
     }
 
     // Resolve the output directory: explicit argument → client roots (MRTR) → configured default.
-    let explicit = arg_str(args, "directory").map(|d| root_to_path(d).unwrap_or_else(|| PathBuf::from(d)));
-    let from_roots = env.mrtr.response("roots").and_then(|r| r["roots"].as_array()).and_then(|roots| roots.iter().find_map(|r| r["uri"].as_str().and_then(root_to_path)));
+    let explicit =
+        arg_str(args, "directory").map(|d| root_to_path(d).unwrap_or_else(|| PathBuf::from(d)));
+    let from_roots = env
+        .mrtr
+        .response("roots")
+        .and_then(|r| r["roots"].as_array())
+        .and_then(|roots| {
+            roots
+                .iter()
+                .find_map(|r| r["uri"].as_str().and_then(root_to_path))
+        });
     let dir = match (explicit, from_roots) {
         (Some(d), _) => d,
         (None, Some(d)) => d,
         (None, None) if env.mrtr.response("roots").is_none() && env.ctx.supports_roots() => {
             let mut requests = Map::new();
-            requests.insert("roots", obj! { "method" => "roots/list", "params" => obj! {} });
-            return ToolOutcome::InputRequired { requests, state: Some(obj! { "step" => "roots" }) };
+            requests.insert(
+                "roots",
+                obj! { "method" => "roots/list", "params" => obj! {} },
+            );
+            return ToolOutcome::InputRequired {
+                requests,
+                state: Some(obj! { "step" => "roots" }),
+            };
         }
         (None, None) => match env.cfg().export_dir.clone() {
             Some(d) => d,
-            None => return tool_error("No output directory: pass 'directory', use a client that offers roots, or set STEAM_MCP_EXPORT_DIR."),
+            None => {
+                return tool_error(
+                    "No output directory: pass 'directory', use a client that offers roots, or set STEAM_MCP_EXPORT_DIR.",
+                );
+            }
         },
     };
     if !dir.is_absolute() || !dir.is_dir() {
-        return tool_error(format!("'{}' is not an existing absolute directory.", dir.display()));
+        return tool_error(format!(
+            "'{}' is not an existing absolute directory.",
+            dir.display()
+        ));
     }
-    if dir.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+    if dir
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
         return tool_error("Directory paths may not contain '..'.");
     }
 
-    let inner_args = args.get("arguments").and_then(|a| a.as_object()).cloned().unwrap_or_default();
+    let inner_args = args
+        .get("arguments")
+        .and_then(|a| a.as_object())
+        .cloned()
+        .unwrap_or_default();
     let mut inner_value = Value::Object(inner_args);
     crate::mcp::schema::coerce(&inner.input_schema, &mut inner_value);
     if let Err(errs) = crate::mcp::schema::validate(&inner.input_schema, &inner_value) {
-        return tool_error(format!("Invalid arguments for {tool_name}: {}", errs.join("; ")));
+        return tool_error(format!(
+            "Invalid arguments for {tool_name}: {}",
+            errs.join("; ")
+        ));
     }
-    let inner_env = ToolEnv { core: env.core, ctx: env.ctx, mrtr: Mrtr::default(), task: None };
+    let inner_env = ToolEnv {
+        core: env.core,
+        ctx: env.ctx,
+        mrtr: Mrtr::default(),
+        task: None,
+    };
     let result = match (inner.handler)(&inner_env, inner_value.as_object().unwrap_or(&Map::new())) {
         ToolOutcome::Done(r) => r,
-        ToolOutcome::InputRequired { .. } => return tool_error(format!("'{tool_name}' needs interactive input and cannot be exported.")),
+        ToolOutcome::InputRequired { .. } => {
+            return tool_error(format!(
+                "'{tool_name}' needs interactive input and cannot be exported."
+            ));
+        }
         ToolOutcome::Error(e) => return ToolOutcome::Error(e),
     };
     if result["isError"].as_bool() == Some(true) {
@@ -266,11 +410,19 @@ fn export_report(env: &ToolEnv, args: &Map) -> ToolOutcome {
         },
         _ => data.to_pretty_string(),
     };
-    let default_name = format!("steam-{}-{}.{format}", tool_name.trim_start_matches("steam_"), crate::util::time::iso8601_secs(crate::util::time::now_secs()).replace([':', '-'], ""));
+    let default_name = format!(
+        "steam-{}-{}.{format}",
+        tool_name.trim_start_matches("steam_"),
+        crate::util::time::iso8601_secs(crate::util::time::now_secs()).replace([':', '-'], "")
+    );
     let name = match arg_str(args, "filename") {
         Some(n) => match sanitize_filename(n) {
             Some(n) => n,
-            None => return tool_error("'filename' may only contain letters, digits, '.', '_' and '-' and must not start with '.'."),
+            None => {
+                return tool_error(
+                    "'filename' may only contain letters, digits, '.', '_' and '-' and must not start with '.'.",
+                );
+            }
         },
         None => default_name,
     };
@@ -278,12 +430,24 @@ fn export_report(env: &ToolEnv, args: &Map) -> ToolOutcome {
     if path.parent() != Some(Path::new(&dir)) {
         return tool_error("Invalid output path.");
     }
-    let mut file = match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+    let mut file = match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+    {
         Ok(f) => f,
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return tool_error(format!("{} already exists; choose another filename.", path.display())),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            return tool_error(format!(
+                "{} already exists; choose another filename.",
+                path.display()
+            ));
+        }
         Err(e) => return tool_error(format!("Could not create {}: {e}", path.display())),
     };
-    if let Err(e) = file.write_all(body.as_bytes()).and_then(|_| file.sync_all()) {
+    if let Err(e) = file
+        .write_all(body.as_bytes())
+        .and_then(|_| file.sync_all())
+    {
         return tool_error(format!("Could not write {}: {e}", path.display()));
     }
     let uri = format!("file://{}", path.display());
@@ -305,7 +469,16 @@ fn export_report(env: &ToolEnv, args: &Map) -> ToolOutcome {
 // steam_summarize_reviews (MRTR: sampling/createMessage)
 // ---------------------------------------------------------------------------
 
-const STOPWORDS: &[&str] = &["the", "and", "a", "to", "of", "is", "it", "i", "this", "that", "in", "for", "you", "but", "with", "game", "on", "are", "be", "not", "have", "was", "as", "so", "just", "my", "if", "its", "it's", "can", "all", "they", "at", "or", "like", "me", "an", "do", "there", "get", "one", "more", "very", "what", "when", "out", "has", "from", "about", "really", "would", "up", "no", "your", "even", "some", "time", "dont", "don't", "will", "only", "good", "play", "games", "much", "by", "than", "also", "other", "been", "which", "make", "them", "we", "how", "were", "had", "any", "after", "then", "still", "playing", "played", "because", "lot", "into", "could", "way", "their", "too", "im", "i'm", "it", "is", "10", "s", "t"];
+const STOPWORDS: &[&str] = &[
+    "the", "and", "a", "to", "of", "is", "it", "i", "this", "that", "in", "for", "you", "but",
+    "with", "game", "on", "are", "be", "not", "have", "was", "as", "so", "just", "my", "if", "its",
+    "it's", "can", "all", "they", "at", "or", "like", "me", "an", "do", "there", "get", "one",
+    "more", "very", "what", "when", "out", "has", "from", "about", "really", "would", "up", "no",
+    "your", "even", "some", "time", "dont", "don't", "will", "only", "good", "play", "games",
+    "much", "by", "than", "also", "other", "been", "which", "make", "them", "we", "how", "were",
+    "had", "any", "after", "then", "still", "playing", "played", "because", "lot", "into", "could",
+    "way", "their", "too", "im", "i'm", "it", "is", "10", "s", "t",
+];
 
 fn top_terms(reviews: &[&Value], n: usize) -> Vec<Value> {
     let mut freq: BTreeMap<String, u64> = BTreeMap::new();
@@ -324,7 +497,10 @@ fn top_terms(reviews: &[&Value], n: usize) -> Vec<Value> {
     }
     let mut v: Vec<(String, u64)> = freq.into_iter().collect();
     v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-    v.into_iter().take(n).map(|(w, c)| obj! { "term" => w, "reviews" => c }).collect()
+    v.into_iter()
+        .take(n)
+        .map(|(w, c)| obj! { "term" => w, "reviews" => c })
+        .collect()
 }
 
 fn summarize_reviews_tool(env: &ToolEnv, args: &Map) -> ToolOutcome {
@@ -333,14 +509,28 @@ fn summarize_reviews_tool(env: &ToolEnv, args: &Map) -> ToolOutcome {
     let mut fetch_args = args.clone();
     fetch_args.insert("filter", arg_str(args, "filter").unwrap_or("all"));
     let pages = n.div_ceil(100);
-    let (qs, reviews, _, lookups) = try_steam!(super::public::fetch_reviews(env, appid, &fetch_args, n.min(100), pages));
+    let (qs, reviews, _, lookups) = try_steam!(super::public::fetch_reviews(
+        env,
+        appid,
+        &fetch_args,
+        n.min(100),
+        pages
+    ));
     let reviews: Vec<Value> = reviews.into_iter().take(n as usize).collect();
     if reviews.is_empty() {
-        return tool_error(format!("App {appid} has no reviews matching these filters."));
+        return tool_error(format!(
+            "App {appid} has no reviews matching these filters."
+        ));
     }
     let summary = super::public::summarize_reviews(&qs);
-    let pos: Vec<&Value> = reviews.iter().filter(|r| r["voted_up"].as_bool() == Some(true)).collect();
-    let neg: Vec<&Value> = reviews.iter().filter(|r| r["voted_up"].as_bool() != Some(true)).collect();
+    let pos: Vec<&Value> = reviews
+        .iter()
+        .filter(|r| r["voted_up"].as_bool() == Some(true))
+        .collect();
+    let neg: Vec<&Value> = reviews
+        .iter()
+        .filter(|r| r["voted_up"].as_bool() != Some(true))
+        .collect();
     let stats = obj! {
         "appid" => appid,
         "overall" => summary,
@@ -353,15 +543,30 @@ fn summarize_reviews_tool(env: &ToolEnv, args: &Map) -> ToolOutcome {
     let refs: Vec<&Lookup> = lookups.iter().collect();
 
     // Retry carrying the client's sampling result.
-    let sampled_step = env.mrtr.state.as_ref().is_some_and(|s| s["step"].as_str() == Some("sampling"));
+    let sampled_step = env
+        .mrtr
+        .state
+        .as_ref()
+        .is_some_and(|s| s["step"].as_str() == Some("sampling"));
     if let (true, Some(msg)) = (sampled_step, env.mrtr.response("summary")) {
         let content = &msg["content"];
         let text = match content {
-            Value::Array(blocks) => blocks.iter().filter_map(|b| b["text"].as_str()).collect::<Vec<_>>().join("\n"),
+            Value::Array(blocks) => blocks
+                .iter()
+                .filter_map(|b| b["text"].as_str())
+                .collect::<Vec<_>>()
+                .join("\n"),
             other => other["text"].as_str().unwrap_or("").to_string(),
         };
         if !text.trim().is_empty() {
-            return ok_result(text.clone(), stats.with("summary", text).with("model", msg["model"].clone()).with("method", "sampling"), &refs);
+            return ok_result(
+                text.clone(),
+                stats
+                    .with("summary", text)
+                    .with("model", msg["model"].clone())
+                    .with("method", "sampling"),
+                &refs,
+            );
         }
     }
 
@@ -369,7 +574,15 @@ fn summarize_reviews_tool(env: &ToolEnv, args: &Map) -> ToolOutcome {
         let focus = arg_str(args, "focus").unwrap_or("overall player sentiment, the most praised aspects, the most common complaints, and actionable recommendations for the developer");
         let mut corpus = String::new();
         for r in &reviews {
-            let line = format!("[{}] {}\n", if r["voted_up"].as_bool() == Some(true) { "+" } else { "-" }, crate::util::truncate(&r["review"].as_str().unwrap_or("").replace('\n', " "), 600));
+            let line = format!(
+                "[{}] {}\n",
+                if r["voted_up"].as_bool() == Some(true) {
+                    "+"
+                } else {
+                    "-"
+                },
+                crate::util::truncate(&r["review"].as_str().unwrap_or("").replace('\n', " "), 600)
+            );
             if corpus.len() + line.len() > 24_000 {
                 break;
             }
@@ -387,19 +600,49 @@ fn summarize_reviews_tool(env: &ToolEnv, args: &Map) -> ToolOutcome {
                 "modelPreferences" => obj! { "intelligencePriority" => 0.7, "speedPriority" => 0.4, "costPriority" => 0.4 },
             },
         });
-        return ToolOutcome::InputRequired { requests, state: Some(obj! { "step" => "sampling" }) };
+        return ToolOutcome::InputRequired {
+            requests,
+            state: Some(obj! { "step" => "sampling" }),
+        };
     }
 
     // Deterministic fallback without an LLM.
-    let pt: Vec<String> = stats["positiveTerms"].as_array().map(|a| a.iter().take(6).filter_map(|t| t["term"].as_str().map(String::from)).collect()).unwrap_or_default();
-    let nt: Vec<String> = stats["negativeTerms"].as_array().map(|a| a.iter().take(6).filter_map(|t| t["term"].as_str().map(String::from)).collect()).unwrap_or_default();
+    let pt: Vec<String> = stats["positiveTerms"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .take(6)
+                .filter_map(|t| t["term"].as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    let nt: Vec<String> = stats["negativeTerms"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .take(6)
+                .filter_map(|t| t["term"].as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
     let text = format!(
         "App {appid}: {} of {} sampled reviews are positive. Overall rating {}. Recurring themes in positive reviews: {}. In negative reviews: {}.",
         pos.len(),
         reviews.len(),
-        stats.at(&["overall", "reviewScoreDescription"]).as_str().unwrap_or("n/a"),
-        if pt.is_empty() { "n/a".into() } else { pt.join(", ") },
-        if nt.is_empty() { "n/a".into() } else { nt.join(", ") }
+        stats
+            .at(&["overall", "reviewScoreDescription"])
+            .as_str()
+            .unwrap_or("n/a"),
+        if pt.is_empty() {
+            "n/a".into()
+        } else {
+            pt.join(", ")
+        },
+        if nt.is_empty() {
+            "n/a".into()
+        } else {
+            nt.join(", ")
+        }
     );
     ok_result(text, stats.with("method", "term-frequency"), &refs)
 }
@@ -507,14 +750,23 @@ mod tests {
 
     #[test]
     fn csv_and_tabular() {
-        let v = crate::json::parse(r#"{"meta":1,"rows":[{"a":1,"b":{"c":"x,y"}},{"a":"=SUM(A1)","d":null}]}"#).unwrap();
+        let v = crate::json::parse(
+            r#"{"meta":1,"rows":[{"a":1,"b":{"c":"x,y"}},{"a":"=SUM(A1)","d":null}]}"#,
+        )
+        .unwrap();
         let rows = tabular(&v).unwrap();
         let csv = to_csv(rows);
         assert_eq!(csv, "a,b.c,d\n1,\"x,y\",\n'=SUM(A1),,\n");
         assert!(sanitize_filename("../x").is_none());
         assert!(sanitize_filename(".hidden").is_none());
-        assert_eq!(sanitize_filename("report-1.csv").as_deref(), Some("report-1.csv"));
-        assert_eq!(root_to_path("file:///tmp/a%20b"), Some(PathBuf::from("/tmp/a b")));
+        assert_eq!(
+            sanitize_filename("report-1.csv").as_deref(),
+            Some("report-1.csv")
+        );
+        assert_eq!(
+            root_to_path("file:///tmp/a%20b"),
+            Some(PathBuf::from("/tmp/a b"))
+        );
         assert_eq!(root_to_path("https://x"), None);
     }
 }

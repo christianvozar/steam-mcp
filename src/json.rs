@@ -83,11 +83,15 @@ pub struct Map {
 
 impl Map {
     pub fn new() -> Self {
-        Map { entries: Vec::new() }
+        Map {
+            entries: Vec::new(),
+        }
     }
 
     pub fn with_capacity(n: usize) -> Self {
-        Map { entries: Vec::with_capacity(n) }
+        Map {
+            entries: Vec::with_capacity(n),
+        }
     }
 
     /// Inserts or replaces a key, returning the previous value.
@@ -107,11 +111,19 @@ impl Map {
     }
 
     pub fn get(&self, key: &str) -> Option<&Value> {
-        self.entries.iter().rev().find(|(k, _)| k == key).map(|(_, v)| v)
+        self.entries
+            .iter()
+            .rev()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v)
     }
 
     pub fn get_mut(&mut self, key: &str) -> Option<&mut Value> {
-        self.entries.iter_mut().rev().find(|(k, _)| k == key).map(|(_, v)| v)
+        self.entries
+            .iter_mut()
+            .rev()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v)
     }
 
     pub fn remove(&mut self, key: &str) -> Option<Value> {
@@ -153,8 +165,11 @@ impl Map {
 
     /// Returns a copy with keys sorted (recursively), used for canonical hashing.
     pub fn sorted(&self) -> Map {
-        let mut entries: Vec<(String, Value)> =
-            self.entries.iter().map(|(k, v)| (k.clone(), v.canonical())).collect();
+        let mut entries: Vec<(String, Value)> = self
+            .entries
+            .iter()
+            .map(|(k, v)| (k.clone(), v.canonical()))
+            .collect();
         entries.sort_by(|a, b| a.0.cmp(&b.0));
         entries.dedup_by(|a, b| a.0 == b.0);
         Map { entries }
@@ -239,7 +254,11 @@ impl Value {
         for p in path {
             cur = match cur {
                 Value::Object(m) => m.get(p).unwrap_or(&NULL),
-                Value::Array(a) => p.parse::<usize>().ok().and_then(|i| a.get(i)).unwrap_or(&NULL),
+                Value::Array(a) => p
+                    .parse::<usize>()
+                    .ok()
+                    .and_then(|i| a.get(i))
+                    .unwrap_or(&NULL),
                 _ => &NULL,
             };
         }
@@ -380,7 +399,10 @@ impl Value {
             Value::String(s) => 24 + s.len(),
             Value::Array(a) => 24 + a.iter().map(|v| v.approx_size()).sum::<usize>(),
             Value::Object(m) => {
-                24 + m.iter().map(|(k, v)| 24 + k.len() + v.approx_size()).sum::<usize>()
+                24 + m
+                    .iter()
+                    .map(|(k, v)| 24 + k.len() + v.approx_size())
+                    .sum::<usize>()
             }
         }
     }
@@ -416,7 +438,11 @@ from_int!(i8 => Int as i64, i16 => Int as i64, i32 => Int as i64, i64 => Int as 
 
 impl From<f64> for Value {
     fn from(v: f64) -> Value {
-        if v.is_finite() { Value::Number(Number::Float(v)) } else { Value::Null }
+        if v.is_finite() {
+            Value::Number(Number::Float(v))
+        } else {
+            Value::Null
+        }
     }
 }
 impl From<f32> for Value {
@@ -643,7 +669,11 @@ pub struct ParseError {
 
 impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "JSON parse error at byte {}: {}", self.offset, self.message)
+        write!(
+            f,
+            "JSON parse error at byte {}: {}",
+            self.offset, self.message
+        )
     }
 }
 
@@ -677,7 +707,10 @@ struct Parser<'a> {
 
 impl<'a> Parser<'a> {
     fn err(&self, msg: &str) -> ParseError {
-        ParseError { offset: self.i, message: msg.to_string() }
+        ParseError {
+            offset: self.i,
+            message: msg.to_string(),
+        }
     }
 
     fn ws(&mut self) {
@@ -847,7 +880,8 @@ impl<'a> Parser<'a> {
                             } else if (0xDC00..0xE000).contains(&cp) {
                                 return Err(self.err("unpaired low surrogate"));
                             }
-                            let ch = char::from_u32(cp).ok_or_else(|| self.err("bad code point"))?;
+                            let ch =
+                                char::from_u32(cp).ok_or_else(|| self.err("bad code point"))?;
                             let mut buf = [0u8; 4];
                             out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
                         }
@@ -926,7 +960,8 @@ mod tests {
 
     #[test]
     fn roundtrip_basic() {
-        let src = r#"{"a":1,"b":[true,false,null],"c":"x\ny","d":-2.5,"e":{"f":18446744073709551615}}"#;
+        let src =
+            r#"{"a":1,"b":[true,false,null],"c":"x\ny","d":-2.5,"e":{"f":18446744073709551615}}"#;
         let v = parse(src).unwrap();
         assert_eq!(v["a"].as_i64(), Some(1));
         assert_eq!(v["e"]["f"].as_u64(), Some(u64::MAX));
@@ -954,7 +989,19 @@ mod tests {
 
     #[test]
     fn rejects_invalid() {
-        for bad in ["", "01", "[1,]", "{\"a\" 1}", "tru", "1 2", "[", "{\"a\":}", "-", "1.", "1e"] {
+        for bad in [
+            "",
+            "01",
+            "[1,]",
+            "{\"a\" 1}",
+            "tru",
+            "1 2",
+            "[",
+            "{\"a\":}",
+            "-",
+            "1.",
+            "1e",
+        ] {
             assert!(parse(bad).is_err(), "should reject {bad:?}");
         }
     }
@@ -969,7 +1016,10 @@ mod tests {
     fn macros_and_canonical() {
         let v = obj! { "z" => 1, "a" => arr![1, "two", obj!{ "k" => true }] };
         assert_eq!(v.to_string(), r#"{"z":1,"a":[1,"two",{"k":true}]}"#);
-        assert_eq!(v.canonical().to_string(), r#"{"a":[1,"two",{"k":true}],"z":1}"#);
+        assert_eq!(
+            v.canonical().to_string(),
+            r#"{"a":[1,"two",{"k":true}],"z":1}"#
+        );
     }
 
     #[test]

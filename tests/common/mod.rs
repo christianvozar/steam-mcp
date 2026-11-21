@@ -36,12 +36,26 @@ impl Mock {
     }
 }
 
-fn respond(mock: &Mock, method: &str, path: &str, q: &HashMap<String, String>, body: &str) -> (u16, String) {
-    *mock.hits.lock().unwrap().entry(path.to_string()).or_default() += 1;
+fn respond(
+    mock: &Mock,
+    method: &str,
+    path: &str,
+    q: &HashMap<String, String>,
+    body: &str,
+) -> (u16, String) {
+    *mock
+        .hits
+        .lock()
+        .unwrap()
+        .entry(path.to_string())
+        .or_default() += 1;
     let key = q.get("key").map(String::as_str);
     let need = |k: &str| key == Some(k);
     if method == "POST" {
-        mock.posts.lock().unwrap().push((path.to_string(), body.to_string()));
+        mock.posts
+            .lock()
+            .unwrap()
+            .push((path.to_string(), body.to_string()));
     }
     match path {
         "/api/appdetails" => {
@@ -146,12 +160,23 @@ pub fn start_mock() -> Mock {
                 let mut reader = BufReader::new(stream);
                 while let Ok(Some(req)) = read_request(&mut reader, 65536, 1 << 20) {
                     let body = String::from_utf8_lossy(&req.body).to_string();
-                    let mut q: HashMap<String, String> = parse_query(req.query.as_deref().unwrap_or("")).into_iter().collect();
+                    let mut q: HashMap<String, String> =
+                        parse_query(req.query.as_deref().unwrap_or(""))
+                            .into_iter()
+                            .collect();
                     if req.method == "POST" {
                         q.extend(parse_query(&body));
                     }
                     let (status, resp) = respond(&m, &req.method, &req.path, &q, &body);
-                    if write_response(reader.get_mut(), status, &[("Content-Type", "application/json".into())], resp.as_bytes(), true).is_err() {
+                    if write_response(
+                        reader.get_mut(),
+                        status,
+                        &[("Content-Type", "application/json".into())],
+                        resp.as_bytes(),
+                        true,
+                    )
+                    .is_err()
+                    {
                         break;
                     }
                 }
@@ -234,7 +259,13 @@ pub fn send(core: &Arc<Core>, msg: &Value) -> (Value, Vec<Value>) {
 
 pub fn send_as(core: &Arc<Core>, msg: &Value, principal: Principal) -> (Value, Vec<Value>) {
     let cap = Arc::new(Capture::default());
-    let reply = core.handle_message(msg, principal, Transport::Internal, cap.clone(), CancelToken::new());
+    let reply = core.handle_message(
+        msg,
+        principal,
+        Transport::Internal,
+        cap.clone(),
+        CancelToken::new(),
+    );
     let resp = match reply {
         Reply::Response(r, _) => r,
         Reply::NoResponse => Value::Null,
@@ -244,7 +275,16 @@ pub fn send_as(core: &Arc<Core>, msg: &Value, principal: Principal) -> (Value, V
 }
 
 pub fn call_tool(core: &Arc<Core>, name: &str, args: Value) -> Value {
-    send(core, &request(1, "tools/call", obj! { "name" => name, "arguments" => args }, obj! {})).0
+    send(
+        core,
+        &request(
+            1,
+            "tools/call",
+            obj! { "name" => name, "arguments" => args },
+            obj! {},
+        ),
+    )
+    .0
 }
 
 pub fn parse(s: &str) -> Value {

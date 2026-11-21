@@ -63,7 +63,10 @@ mod tests {
     fn truncate_and_strip() {
         assert_eq!(truncate("héllo", 2), "h…");
         assert_eq!(truncate("abc", 10), "abc");
-        assert_eq!(strip_markup("[b]Hi[/b] <i>there</i>\n\n friend"), "Hi there friend");
+        assert_eq!(
+            strip_markup("[b]Hi[/b] <i>there</i>\n\n friend"),
+            "Hi there friend"
+        );
     }
 
     #[test]

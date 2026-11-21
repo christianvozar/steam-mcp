@@ -41,7 +41,8 @@ fn spawn(mock: &Mock) -> Proc {
     std::thread::spawn(move || {
         for line in BufReader::new(stdout).lines() {
             let Ok(line) = line else { break };
-            tx.send(steam_mcp::json::parse(&line).expect("stdout must only carry JSON-RPC")).ok();
+            tx.send(steam_mcp::json::parse(&line).expect("stdout must only carry JSON-RPC"))
+                .ok();
         }
     });
     let stdin = child.stdin.take();
@@ -55,7 +56,9 @@ impl Proc {
         s.flush().unwrap();
     }
     fn recv(&self) -> Value {
-        self.rx.recv_timeout(Duration::from_secs(10)).expect("timed out waiting for output")
+        self.rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("timed out waiting for output")
     }
     fn recv_id(&self, id: i64) -> Value {
         loop {
@@ -92,7 +95,12 @@ fn concurrency_cancellation_and_shutdown() {
     std::thread::sleep(Duration::from_millis(1500));
 
     // Open a subscription, then close stdin: the server completes it and exits.
-    p.send(&request(4, "subscriptions/listen", obj! { "notifications" => obj! { "toolsListChanged" => true } }, obj! {}));
+    p.send(&request(
+        4,
+        "subscriptions/listen",
+        obj! { "notifications" => obj! { "toolsListChanged" => true } },
+        obj! {},
+    ));
     let mut seen = Vec::new();
     let ack = loop {
         let v = p.recv();
@@ -101,8 +109,14 @@ fn concurrency_cancellation_and_shutdown() {
         }
         seen.push(v);
     };
-    assert_eq!(ack["params"]["_meta"]["io.modelcontextprotocol/subscriptionId"].as_i64(), Some(4));
-    assert!(seen.iter().all(|v| v["id"].as_i64() != Some(1)), "cancelled request produced a response: {seen:?}");
+    assert_eq!(
+        ack["params"]["_meta"]["io.modelcontextprotocol/subscriptionId"].as_i64(),
+        Some(4)
+    );
+    assert!(
+        seen.iter().all(|v| v["id"].as_i64() != Some(1)),
+        "cancelled request produced a response: {seen:?}"
+    );
     drop(p.stdin.take());
     let done = p.recv_id(4);
     assert_eq!(done["result"]["resultType"].as_str(), Some("complete"));
@@ -114,16 +128,38 @@ fn concurrency_cancellation_and_shutdown() {
 fn invalid_input_is_reported_without_crashing() {
     let mock = start_mock();
     let mut p = spawn(&mock);
-    p.stdin.as_mut().unwrap().write_all(b"{not json}\n\n   \n").unwrap();
+    p.stdin
+        .as_mut()
+        .unwrap()
+        .write_all(b"{not json}\n\n   \n")
+        .unwrap();
     let e = p.recv();
     assert_eq!(e["error"]["code"].as_i64(), Some(-32700));
     assert!(e.get("id").is_none());
-    p.send(&request(1, "initialize", obj! { "protocolVersion" => "2025-11-25" }, obj! {}));
+    p.send(&request(
+        1,
+        "initialize",
+        obj! { "protocolVersion" => "2025-11-25" },
+        obj! {},
+    ));
     let e = p.recv();
     assert_eq!(e["error"]["code"].as_i64(), Some(-32022));
-    assert!(e["error"]["message"].as_str().unwrap().contains("2026-07-28"));
-    p.send(&request(2, "tools/call", obj! { "name" => "steam_get_app_details", "arguments" => obj! { "appid" => 570 } }, obj! {}));
-    assert_eq!(p.recv()["result"]["structuredContent"]["summary"]["name"].as_str(), Some("Dota 2"));
+    assert!(
+        e["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("2026-07-28")
+    );
+    p.send(&request(
+        2,
+        "tools/call",
+        obj! { "name" => "steam_get_app_details", "arguments" => obj! { "appid" => 570 } },
+        obj! {},
+    ));
+    assert_eq!(
+        p.recv()["result"]["structuredContent"]["summary"]["name"].as_str(),
+        Some("Dota 2")
+    );
     drop(p.stdin.take());
     assert!(p.child.wait().unwrap().success());
 }

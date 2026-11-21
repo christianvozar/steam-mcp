@@ -41,14 +41,19 @@ fn main() {
     let mut list_tools = false;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
-        let mut value = |name: &str| args.next().unwrap_or_else(|| fail(&format!("{name} requires a value")));
+        let mut value = |name: &str| {
+            args.next()
+                .unwrap_or_else(|| fail(&format!("{name} requires a value")))
+        };
         match a.as_str() {
             "--stdio" => sources.stdio = true,
             "--http" => sources.http_bind = Some(value("--http")),
             "--config" => sources.file = Some(value("--config").into()),
             "--set" => {
                 let kv = value("--set");
-                let (k, v) = kv.split_once('=').unwrap_or_else(|| fail("--set expects KEY=VALUE"));
+                let (k, v) = kv
+                    .split_once('=')
+                    .unwrap_or_else(|| fail("--set expects KEY=VALUE"));
                 sources.cli.push((k.trim().to_string(), v.to_string()));
             }
             "--log-level" => log_override = Some(value("--log-level")),
@@ -70,7 +75,10 @@ fn main() {
         cfg.log_level = l;
     }
     log::set_json(cfg.log_json);
-    log::set_level(log::Level::parse(&cfg.log_level).unwrap_or_else(|| fail(&format!("invalid log level {:?}", cfg.log_level))));
+    log::set_level(
+        log::Level::parse(&cfg.log_level)
+            .unwrap_or_else(|| fail(&format!("invalid log level {:?}", cfg.log_level))),
+    );
     if cfg.http_bind.is_none() {
         cfg.stdio = true;
     }
@@ -100,11 +108,16 @@ fn main() {
         public_key = cfg.public_key().is_some(),
         publisher_key = cfg.has_partner(),
         financial_key = cfg.has_financial(),
-        cache_file = cfg.cache_file.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "none".into()),
+        cache_file = cfg
+            .cache_file
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "none".into()),
     );
 
     let http_handle = cfg.http_bind.clone().map(|bind| {
-        let server = Arc::new(transport::http::HttpServer::new(core.clone()).unwrap_or_else(|e| fail(&e)));
+        let server =
+            Arc::new(transport::http::HttpServer::new(core.clone()).unwrap_or_else(|e| fail(&e)));
         std::thread::Builder::new()
             .name("http".into())
             .spawn(move || {
