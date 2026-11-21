@@ -265,6 +265,11 @@ When you run more than one replica behind a load balancer:
 
 See `examples/steam-mcp.conf` for an annotated configuration.
 
+## Design records and references
+
+- [`docs/adr/`](docs/adr/README.md) — architecture decision records (dependencies, protocol revision, caching, concurrency, MRTR state, auth, writes, tasks).
+- [`ref/`](ref/README.md) — pinned copies of the MCP 2026-07-28 spec and schema and the Tasks extension, a Steam endpoint inventory with verification status, and a requirement-to-code compliance map.
+
 ## Development
 
 ```sh
