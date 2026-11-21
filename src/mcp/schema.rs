@@ -3,7 +3,8 @@
 //! Supports: `type` (string or array), `enum`, `const`, `properties`,
 //! `required`, `additionalProperties` (bool or schema), `items`, `minItems`,
 //! `maxItems`, `uniqueItems`, `minimum`, `maximum`, `exclusiveMinimum`,
-//! `exclusiveMaximum`, `minLength`, `maxLength`, `format` (date, date-time,
+//! `exclusiveMaximum`, `minLength`, `maxLength`, `pattern` (see
+//! [`crate::util::regex`]), `format` (date, date-time,
 //! email, uri), `anyOf`, `oneOf`, `allOf`, `not`, and local `$ref`
 //! (`#/$defs/...`). Network `$ref`s are never dereferenced. Depth and
 //! subschema-count bounds protect against pathological schemas.
@@ -132,6 +133,22 @@ fn check(ctx: &mut Ctx, schema: &Value, v: &Value, path: &str, depth: usize) {
                 if len > max {
                     ctx.errors
                         .push(format!("{path}: must be at most {max} characters"));
+                }
+            }
+            if let Some(pat) = s.get("pattern").and_then(|p| p.as_str()) {
+                match crate::util::regex::Regex::new(pat) {
+                    Ok(re) => match re.is_match(st) {
+                        Ok(true) => {}
+                        Ok(false) => ctx.errors.push(format!("{path}: must match pattern {pat}")),
+                        Err(e) => ctx.errors.push(format!("{path}: {e}")),
+                    },
+                    // Unsupported syntax: skip rather than reject valid input.
+                    Err(e) => crate::log_debug!(
+                        "schema",
+                        "pattern not enforced",
+                        pattern = pat,
+                        reason = e
+                    ),
                 }
             }
             if let Some(fmt) = s.get("format").and_then(|f| f.as_str()) {
@@ -355,7 +372,7 @@ mod tests {
             "type":"object",
             "properties":{
                 "appid":{"type":"integer","minimum":1},
-                "cc":{"type":"string","minLength":2,"maxLength":2},
+                "cc":{"type":"string","minLength":2,"maxLength":2,"pattern":"^[a-z]{2}$"},
                 "filter":{"type":"string","enum":["recent","all"]},
                 "ids":{"type":"array","items":{"type":"integer"},"maxItems":2,"uniqueItems":true},
                 "date":{"type":"string","format":"date"},
@@ -369,7 +386,7 @@ mod tests {
         .unwrap();
         assert!(validate(&schema, &parse(r#"{"appid":570,"cc":"us","filter":"all","ids":[1,2],"date":"2026-01-31","ref":0.5}"#).unwrap()).is_ok());
         let errs = validate(&schema, &parse(r#"{"appid":0,"cc":"usa","filter":"x","ids":[1,1,3],"date":"2026-02-31","ref":0,"extra":1}"#).unwrap()).unwrap_err();
-        assert_eq!(errs.len(), 8, "{errs:?}");
+        assert_eq!(errs.len(), 9, "{errs:?}");
         assert!(validate(&schema, &parse("{}").unwrap()).is_err());
         assert!(validate(&schema, &parse("[]").unwrap()).is_err());
     }

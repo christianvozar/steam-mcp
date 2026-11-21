@@ -138,6 +138,19 @@ fn negative_results_and_validation_errors_are_tool_errors() {
         &request(2, "tools/call", obj! { "name" => "no_such_tool" }, obj! {}),
     );
     assert_eq!(r["error"]["code"].as_i64(), Some(-32602));
+    // The SteamID pattern is enforced by the schema validator.
+    let r = call_tool(
+        &core,
+        "steam_get_player_summaries",
+        obj! { "steamids" => steam_mcp::arr!["7656119796028793x"] },
+    );
+    assert!(
+        r["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("must match pattern"),
+        "{r}"
+    );
 }
 
 #[test]
