@@ -168,6 +168,7 @@ pub struct Config {
     pub max_request_bytes: usize,
     pub sse_keepalive_secs: u64,
     pub shutdown_grace_secs: u64,
+    pub request_read_timeout_secs: u64,
 
     pub auth: AuthConfig,
 
@@ -338,6 +339,10 @@ pub const KEYS: &[(&str, &str)] = &[
     (
         "STEAM_MCP_SSE_KEEPALIVE",
         "Seconds between SSE keep-alive comments (default 15)",
+    ),
+    (
+        "STEAM_MCP_REQUEST_READ_TIMEOUT",
+        "Seconds a client has to send a complete HTTP request once it starts (default 30)",
     ),
     (
         "STEAM_MCP_SHUTDOWN_GRACE",
@@ -682,6 +687,11 @@ impl Config {
                 15,
             )?
             .max(1),
+            request_read_timeout_secs: num(
+                get("STEAM_MCP_REQUEST_READ_TIMEOUT"),
+                "STEAM_MCP_REQUEST_READ_TIMEOUT",
+                30,
+            )?,
             shutdown_grace_secs: num(
                 get("STEAM_MCP_SHUTDOWN_GRACE"),
                 "STEAM_MCP_SHUTDOWN_GRACE",

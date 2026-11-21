@@ -12,11 +12,11 @@
 //! * Closing a response stream cancels the request.
 //! * Operational endpoints: `/healthz`, `/readyz`, `/metrics`.
 
-use std::io::{self, BufReader};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::auth::{AuthFailure, Authenticator};
 use crate::http::server::{
@@ -30,9 +30,67 @@ use crate::mcp::server::{Core, Reply};
 use crate::util::CancelToken;
 use crate::util::encoding::b64_decode;
 
+/// How long an idle keep-alive connection may wait for the next request.
+const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// A server-side connection with an optional absolute read deadline. Once a
+/// request starts arriving, the whole head and body must be received before
+/// the deadline, which defeats slow-drip ("slowloris") clients that would
+/// otherwise reset a per-read timeout forever.
+pub struct Conn {
+    inner: Stream,
+    deadline: Option<Instant>,
+}
+
+impl Conn {
+    pub fn new(inner: Stream) -> Conn {
+        Conn {
+            inner,
+            deadline: None,
+        }
+    }
+
+    pub fn tcp(&self) -> &TcpStream {
+        self.inner.tcp()
+    }
+
+    fn set_deadline(&mut self, d: Option<Instant>) {
+        self.deadline = d;
+    }
+}
+
+impl Read for Conn {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let timeout = match self.deadline {
+            Some(d) => {
+                let remaining = d.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "request read deadline exceeded",
+                    ));
+                }
+                remaining.min(IDLE_TIMEOUT)
+            }
+            None => IDLE_TIMEOUT,
+        };
+        self.inner.tcp().set_read_timeout(Some(timeout)).ok();
+        self.inner.read(buf)
+    }
+}
+
+impl Write for Conn {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.inner.write(buf)
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
+
 /// SSE response stream shared between the request thread and notifiers.
 struct SseSink {
-    stream: Arc<Mutex<Stream>>,
+    stream: Arc<Mutex<Conn>>,
     closed: AtomicBool,
 }
 
@@ -207,12 +265,31 @@ impl HttpServer {
             None => Stream::Plain(tcp),
         };
         let cfg = self.core.config.get();
-        let mut reader = BufReader::with_capacity(32 * 1024, stream);
+        let read_timeout = Duration::from_secs(cfg.request_read_timeout_secs.max(1));
+        let mut reader = BufReader::with_capacity(32 * 1024, Conn::new(stream));
         loop {
+            // Wait (idle timeout) for the first byte of the next request, then
+            // require the full request within the read deadline.
+            reader.get_mut().set_deadline(None);
+            match reader.fill_buf() {
+                Ok(b) if !b.is_empty() => {}
+                _ => return,
+            }
+            reader
+                .get_mut()
+                .set_deadline(Some(Instant::now() + read_timeout));
             let req = read_request(&mut reader, 64 * 1024, cfg.max_request_bytes);
+            reader.get_mut().set_deadline(None);
             let mut req = match req {
                 Ok(Some(r)) => r,
-                Ok(None) => return,
+                Ok(None) => {
+                    crate::log_debug!(
+                        "http",
+                        "connection closed mid-request or read deadline exceeded",
+                        peer = peer
+                    );
+                    return;
+                }
                 Err(e) => {
                     let _ = write_response(
                         reader.get_mut(),
@@ -234,7 +311,7 @@ impl HttpServer {
 
     /// Handles one request. Returns the reader for keep-alive, or `None`
     /// when the connection must close.
-    fn route(&self, req: HttpRequest, mut reader: BufReader<Stream>) -> Option<BufReader<Stream>> {
+    fn route(&self, req: HttpRequest, mut reader: BufReader<Conn>) -> Option<BufReader<Conn>> {
         let cfg = self.core.config.get();
         let keep = req.keep_alive();
         let tls = self.tls.is_some();
@@ -258,7 +335,7 @@ impl HttpServer {
                 "WWW-Authenticate, Content-Type".into(),
             ));
         }
-        let respond = |reader: &mut BufReader<Stream>,
+        let respond = |reader: &mut BufReader<Conn>,
                        status: u16,
                        mut headers: Vec<(&str, String)>,
                        ctype: &str,
@@ -404,15 +481,15 @@ impl HttpServer {
     fn handle_post(
         &self,
         req: HttpRequest,
-        mut reader: BufReader<Stream>,
+        mut reader: BufReader<Conn>,
         cors: &[(&str, String)],
         keep: bool,
-    ) -> Option<BufReader<Stream>> {
+    ) -> Option<BufReader<Conn>> {
         let cfg = self.core.config.get();
         let tls = self.tls.is_some();
         let host = req.headers.get("host").map(String::from);
         let md_url = Authenticator::metadata_url(&cfg, host.as_deref(), tls);
-        let send_json = |reader: &mut BufReader<Stream>,
+        let send_json = |reader: &mut BufReader<Conn>,
                          status: u16,
                          extra: Vec<(&str, String)>,
                          body: &Value|
@@ -639,10 +716,10 @@ impl HttpServer {
         &self,
         msg: Value,
         principal: Principal,
-        reader: BufReader<Stream>,
+        reader: BufReader<Conn>,
         cors: &[(&str, String)],
         md_url: &str,
-    ) -> Option<BufReader<Stream>> {
+    ) -> Option<BufReader<Conn>> {
         let cfg = self.core.config.get();
         // SSE responses own the connection until they end.
         let stream = reader.into_inner();
@@ -820,14 +897,65 @@ impl HttpServer {
     }
 }
 
-/// Watches a connection for EOF while a request is processed; a closed
-/// connection cancels the request.
+/// Peer-hangup detection. On Linux, `poll(2)` with `POLLRDHUP` reports a
+/// half-closed peer even when unread bytes (for example a TLS close_notify
+/// alert) are buffered, which `peek` cannot distinguish from data.
+#[cfg(target_os = "linux")]
+mod hangup {
+    use std::os::fd::AsRawFd;
+
+    #[repr(C)]
+    struct PollFd {
+        fd: i32,
+        events: i16,
+        revents: i16,
+    }
+
+    const POLLERR: i16 = 0x008;
+    const POLLHUP: i16 = 0x010;
+    const POLLRDHUP: i16 = 0x2000;
+
+    unsafe extern "C" {
+        fn poll(fds: *mut PollFd, nfds: std::ffi::c_ulong, timeout: i32) -> i32;
+    }
+
+    /// `Some(true)` if the peer hung up, `Some(false)` if not (after waiting
+    /// up to `timeout_ms`), `None` if poll failed.
+    pub fn check(tcp: &std::net::TcpStream, timeout_ms: i32) -> Option<bool> {
+        let mut fd = PollFd {
+            fd: tcp.as_raw_fd(),
+            events: POLLRDHUP,
+            revents: 0,
+        };
+        // SAFETY: one valid pollfd for an open socket; poll does not retain it.
+        let rc = unsafe { poll(&mut fd, 1, timeout_ms) };
+        if rc < 0 {
+            return None;
+        }
+        Some(rc > 0 && fd.revents & (POLLRDHUP | POLLHUP | POLLERR) != 0)
+    }
+}
+
+/// Watches a connection while a request is processed; a peer hangup cancels
+/// the request.
 fn spawn_disconnect_monitor(
     tcp: TcpStream,
     cancel: CancelToken,
     done: Arc<AtomicBool>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
+        #[cfg(target_os = "linux")]
+        while !done.load(Ordering::SeqCst) {
+            match hangup::check(&tcp, 200) {
+                Some(true) => {
+                    cancel.cancel();
+                    return;
+                }
+                Some(false) => {}
+                None => break, // fall back to peek below
+            }
+        }
+        // Portable fallback: EOF via peek (cannot see FIN behind unread data).
         tcp.set_read_timeout(Some(Duration::from_millis(200))).ok();
         let mut buf = [0u8; 1];
         while !done.load(Ordering::SeqCst) {
