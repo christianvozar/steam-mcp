@@ -534,3 +534,92 @@ fn subscription_stream_lifecycle() {
         Some(12)
     );
 }
+
+#[test]
+fn slow_requests_hit_the_read_deadline() {
+    let (srv, _m) = start(&[("STEAM_MCP_REQUEST_READ_TIMEOUT", "1")]);
+    let mut s = TcpStream::connect(srv.addr).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    let started = std::time::Instant::now();
+    s.write_all(b"POST /mcp HTTP/1.1\r\nHost: x\r\n").unwrap();
+    // Drip one header byte every 300 ms: each read succeeds, so only an
+    // absolute deadline can stop this.
+    let mut closed = false;
+    for b in b"X-Slow: aaaaaaaaaaaaaaaaaaaa".iter() {
+        std::thread::sleep(Duration::from_millis(300));
+        if s.write_all(&[*b]).is_err() {
+            closed = true;
+            break;
+        }
+        let mut probe = [0u8; 1];
+        s.set_nonblocking(true).unwrap();
+        let r = s.read(&mut probe);
+        s.set_nonblocking(false).unwrap();
+        if matches!(r, Ok(0)) {
+            closed = true;
+            break;
+        }
+    }
+    assert!(closed, "server kept a slow-drip request open");
+    assert!(
+        started.elapsed() < Duration::from_secs(4),
+        "closed after {:?}",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn tls_disconnect_cancels_in_flight_request() {
+    let dir = env!("CARGO_MANIFEST_DIR");
+    let cert = format!("{dir}/tests/fixtures/tls-cert.pem");
+    let key = format!("{dir}/tests/fixtures/tls-key.pem");
+    let (srv, mock) = start(&[
+        ("STEAM_MCP_TLS_CERT", cert.as_str()),
+        ("STEAM_MCP_TLS_KEY", key.as_str()),
+    ]);
+    mock.sales_delay_ms
+        .store(700, std::sync::atomic::Ordering::SeqCst);
+
+    use rustls::pki_types::{CertificateDer, ServerName, pem::PemObject};
+    let mut roots = rustls::RootCertStore::empty();
+    for c in CertificateDer::pem_file_iter(&cert).unwrap() {
+        roots.add(c.unwrap()).unwrap();
+    }
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let cfg = rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    let conn =
+        rustls::ClientConnection::new(Arc::new(cfg), ServerName::try_from("localhost").unwrap())
+            .unwrap();
+    let tcp = TcpStream::connect(srv.addr).unwrap();
+    let mut tls = rustls::StreamOwned::new(conn, tcp);
+
+    let call = request(
+        1,
+        "tools/call",
+        obj! { "name" => "steam_partner_get_detailed_sales", "arguments" => obj! { "date" => "2026/07/01", "all_pages" => true } },
+        obj! {},
+    );
+    let body = call.to_string();
+    let req = format!(
+        "POST /mcp HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {ADMIN}\r\nContent-Type: application/json\r\nAccept: application/json, text/event-stream\r\nMCP-Protocol-Version: 2026-07-28\r\nMcp-Method: tools/call\r\nMcp-Name: steam_partner_get_detailed_sales\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    tls.write_all(req.as_bytes()).unwrap();
+    tls.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(250));
+    // A well-behaved TLS client sends close_notify, then closes the socket.
+    tls.conn.send_close_notify();
+    let _ = tls.conn.complete_io(&mut tls.sock);
+    drop(tls);
+
+    std::thread::sleep(Duration::from_millis(2500));
+    assert_eq!(
+        mock.hits("/IPartnerFinancialsService/GetDetailedSales/v001/"),
+        1,
+        "work continued after the client disconnected"
+    );
+}
