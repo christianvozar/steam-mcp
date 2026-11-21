@@ -109,7 +109,6 @@ pub fn review_summary_call(appid: u64, language: &str, purchase_type: &str) -> C
     .param("num_per_page", 0)
     .param("language", language)
     .param("purchase_type", purchase_type)
-    .param("filter", "summary")
     .negative_if(reviews_negative)
 }
 
