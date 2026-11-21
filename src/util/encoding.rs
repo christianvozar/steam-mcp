@@ -82,6 +82,21 @@ pub fn b64_decode(input: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// Strict, canonical unpadded base64url (RFC 4648 §5) as used by JWTs and
+/// sealed state: rejects padding, whitespace, the standard alphabet and
+/// non-zero trailing bits, so each byte string has exactly one encoding.
+pub fn b64url_decode_strict(input: &str) -> Option<Vec<u8>> {
+    if !input
+        .bytes()
+        .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
+        || input.len() % 4 == 1
+    {
+        return None;
+    }
+    let out = b64_decode(input)?;
+    (b64url_encode(&out) == input).then_some(out)
+}
+
 fn is_unreserved(c: u8) -> bool {
     c.is_ascii_alphanumeric() || matches!(c, b'-' | b'.' | b'_' | b'~')
 }
@@ -182,6 +197,10 @@ mod tests {
         assert!(b64_decode("A").is_none());
         assert!(b64_decode("Zg==Zg").is_none());
         assert!(b64_decode("Z!").is_none());
+        assert_eq!(b64url_decode_strict("Zm9vYg").unwrap(), b"foob");
+        for bad in ["Zm9vYg==", "Zm9v Yg", "Zm9vYh", "Zm+v", "Z"] {
+            assert!(b64url_decode_strict(bad).is_none(), "{bad}");
+        }
     }
 
     #[test]

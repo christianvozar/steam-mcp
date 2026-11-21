@@ -13,7 +13,7 @@ use super::protocol::McpError;
 use crate::json::{self, Value};
 use crate::obj;
 use crate::util::crypto::{ct_eq, hmac_sha256, random_id, sha256_hex};
-use crate::util::encoding::{b64_decode, b64url_encode};
+use crate::util::encoding::{b64url_decode_strict, b64url_encode};
 use crate::util::time::now_ms;
 
 /// What a request state is bound to.
@@ -64,11 +64,11 @@ impl StateSealer {
             return Err(invalid("malformed"));
         };
         let expected = hmac_sha256(&self.key, format!("v1.{body}").as_bytes());
-        let given = b64_decode(mac).ok_or_else(|| invalid("malformed signature"))?;
+        let given = b64url_decode_strict(mac).ok_or_else(|| invalid("malformed signature"))?;
         if !ct_eq(&expected, &given) {
             return Err(invalid("integrity check failed"));
         }
-        let raw = b64_decode(body).ok_or_else(|| invalid("malformed body"))?;
+        let raw = b64url_decode_strict(body).ok_or_else(|| invalid("malformed body"))?;
         let v = json::parse_bytes(&raw).map_err(|_| invalid("malformed body"))?;
         if v["m"].as_str() != Some(binding.method)
             || v["d"].as_str() != Some(binding.digest().as_str())

@@ -17,7 +17,7 @@ use crate::json::{self, Value};
 use crate::mcp::context::Principal;
 use crate::obj;
 use crate::util::crypto::{ct_eq, hmac_sha256, sha256, sha256_hex};
-use crate::util::encoding::{b64_decode, b64_encode, build_query};
+use crate::util::encoding::{b64_decode, b64_encode, b64url_decode_strict, build_query};
 use crate::util::time::now_secs;
 
 /// An authentication failure with the challenge to return.
@@ -265,14 +265,14 @@ impl Authenticator {
         if parts.len() != 3 {
             return Err(AuthFailure::invalid("Token is not a JWT"));
         }
-        let header = b64_decode(parts[0])
+        let header = b64url_decode_strict(parts[0])
             .and_then(|b| json::parse_bytes(&b).ok())
             .ok_or_else(|| AuthFailure::invalid("Malformed JWT header"))?;
-        let claims = b64_decode(parts[1])
+        let claims = b64url_decode_strict(parts[1])
             .and_then(|b| json::parse_bytes(&b).ok())
             .ok_or_else(|| AuthFailure::invalid("Malformed JWT claims"))?;
-        let sig =
-            b64_decode(parts[2]).ok_or_else(|| AuthFailure::invalid("Malformed JWT signature"))?;
+        let sig = b64url_decode_strict(parts[2])
+            .ok_or_else(|| AuthFailure::invalid("Malformed JWT signature"))?;
         let signing_input = format!("{}.{}", parts[0], parts[1]);
         let alg = header["alg"].as_str().unwrap_or("");
         let verified = match alg {
