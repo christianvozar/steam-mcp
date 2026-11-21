@@ -464,6 +464,11 @@ impl From<Vec<&str>> for Value {
         Value::Array(v.into_iter().map(Value::from).collect())
     }
 }
+impl<const N: usize> From<[&str; N]> for Value {
+    fn from(v: [&str; N]) -> Value {
+        Value::Array(v.iter().map(|s| Value::from(*s)).collect())
+    }
+}
 impl From<&Value> for Value {
     fn from(v: &Value) -> Value {
         v.clone()
