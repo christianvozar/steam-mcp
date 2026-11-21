@@ -33,6 +33,9 @@ pub struct Policy {
     pub stale: Duration,
     /// TTL used when the fetcher reports a negative (not-found) result.
     pub negative_ttl: Duration,
+    /// Whether results may be stored at all. A zero TTL with `store` set
+    /// means "always revalidate, but keep the value for stale-if-error".
+    pub store: bool,
 }
 
 impl Policy {
@@ -41,15 +44,15 @@ impl Policy {
             ttl: Duration::from_secs(ttl_secs),
             stale: Duration::from_secs(stale_secs),
             negative_ttl: Duration::from_secs(if ttl_secs < 60 { ttl_secs } else { 60 }),
+            store: true,
         }
     }
 
-    /// A policy that never caches (used for one-shot, per-user secrets such as
-    /// auth ticket validation).
-    pub const NONE: Policy = Policy { ttl: Duration::ZERO, stale: Duration::ZERO, negative_ttl: Duration::ZERO };
+    /// A policy that never stores results (one-shot verifications).
+    pub const NONE: Policy = Policy { ttl: Duration::ZERO, stale: Duration::ZERO, negative_ttl: Duration::ZERO, store: false };
 
     pub fn is_none(&self) -> bool {
-        self.ttl.is_zero()
+        !self.store
     }
 }
 
@@ -695,7 +698,7 @@ mod tests {
     #[test]
     fn stale_while_revalidate_and_stale_on_error() {
         let cache = Cache::new(CacheConfig::default());
-        let p = Policy { ttl: Duration::from_millis(1), stale: Duration::from_secs(60), negative_ttl: Duration::ZERO };
+        let p = Policy { ttl: Duration::from_millis(1), stale: Duration::from_secs(60), negative_ttl: Duration::ZERO, store: true };
         let n = Arc::new(AtomicUsize::new(0));
         cache.get_or_fetch("k", &p, false, counting_fetch(n.clone(), 1)).unwrap();
         std::thread::sleep(Duration::from_millis(5));
@@ -705,7 +708,7 @@ mod tests {
         std::thread::sleep(Duration::from_millis(100));
         assert_eq!(n.load(Ordering::SeqCst), 2, "background refresh ran");
 
-        let p2 = Policy { ttl: Duration::from_millis(1), stale: Duration::ZERO, negative_ttl: Duration::ZERO };
+        let p2 = Policy { ttl: Duration::from_millis(1), stale: Duration::ZERO, negative_ttl: Duration::ZERO, store: true };
         cache.put("e", Value::from("old"), &p2, false);
         std::thread::sleep(Duration::from_millis(5));
         let failing: FetchFn = Arc::new(|| Err(FetchError { message: "down".into(), status: Some(503), transient: true }));
