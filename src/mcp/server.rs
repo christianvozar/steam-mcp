@@ -23,8 +23,9 @@ use crate::util::ratelimit::KeyedLimiter;
 
 /// What the transport should do with a handled message.
 pub enum Reply {
-    /// Send this JSON-RPC response.
-    Response(Value),
+    /// Send this JSON-RPC response; the u16 is the HTTP status the
+    /// Streamable HTTP binding should use.
+    Response(Value, u16),
     /// Nothing to send (notification, or a cancelled request).
     NoResponse,
     /// Keep the stream open for this subscription until it closes.
@@ -122,23 +123,23 @@ impl Core {
     /// Handles one inbound JSON-RPC message.
     pub fn handle_message(self: &Arc<Self>, msg: &Value, principal: Principal, transport: Transport, sink: Arc<dyn Sink>, cancel: CancelToken) -> Reply {
         let Some(m) = msg.as_object() else {
-            return Reply::Response(error_response(None, &McpError::invalid_request("A JSON-RPC message must be an object (batches are not supported)")));
+            { let e = McpError::invalid_request("A JSON-RPC message must be an object (batches are not supported)"); return Reply::Response(error_response(None, &e), e.http_status); }
         };
         let id = m.get("id").filter(|v| !v.is_null()).cloned();
         let valid_id = id.as_ref().filter(|i| valid_request_id(i)).cloned();
         if m.get("jsonrpc").and_then(|v| v.as_str()) != Some(JSONRPC_VERSION) {
-            return Reply::Response(error_response(valid_id.as_ref(), &McpError::invalid_request("jsonrpc must be \"2.0\"")));
+            { let e = McpError::invalid_request("jsonrpc must be \"2.0\""); return Reply::Response(error_response(valid_id.as_ref(), &e), e.http_status); }
         }
         let Some(method) = m.get("method").and_then(|v| v.as_str()) else {
             if m.contains_key("result") || m.contains_key("error") {
                 crate::log_debug!("mcp", "ignoring JSON-RPC response sent by client");
                 return Reply::NoResponse;
             }
-            return Reply::Response(error_response(valid_id.as_ref(), &McpError::invalid_request("missing method")));
+            { let e = McpError::invalid_request("missing method"); return Reply::Response(error_response(valid_id.as_ref(), &e), e.http_status); }
         };
         let params = m.get("params");
         if params.is_some_and(|p| !p.is_object() && !p.is_null()) {
-            return Reply::Response(error_response(valid_id.as_ref(), &McpError::invalid_request("params must be an object")));
+            { let e = McpError::invalid_request("params must be an object"); return Reply::Response(error_response(valid_id.as_ref(), &e), e.http_status); }
         }
         let Some(id) = id else {
             self.stats.notifications.fetch_add(1, Ordering::Relaxed);
@@ -146,7 +147,7 @@ impl Core {
             return Reply::NoResponse;
         };
         if valid_id.is_none() {
-            return Reply::Response(error_response(None, &McpError::invalid_request("id must be a string or integer")));
+            { let e = McpError::invalid_request("id must be a string or integer"); return Reply::Response(error_response(None, &e), e.http_status); }
         }
         self.stats.requests.fetch_add(1, Ordering::Relaxed);
         *self.stats.by_method.lock().unwrap_or_else(|e| e.into_inner()).entry(method.to_string()).or_default() += 1;
@@ -157,19 +158,19 @@ impl Core {
             let mut e = McpError::unsupported_version(requested);
             e.message = format!("This server implements the stateless MCP revision {PROTOCOL_VERSION} only; the initialize handshake is not supported. Supported versions: {}", SUPPORTED_VERSIONS.join(", "));
             self.stats.errors.fetch_add(1, Ordering::Relaxed);
-            return Reply::Response(error_response(Some(&id), &e));
+            return Reply::Response(error_response(Some(&id), &e), e.http_status);
         }
 
         let meta = match RequestMeta::parse(params) {
             Ok(m) => m,
             Err(e) => {
                 self.stats.errors.fetch_add(1, Ordering::Relaxed);
-                return Reply::Response(error_response(Some(&id), &e));
+                return Reply::Response(error_response(Some(&id), &e), e.http_status);
             }
         };
         if let Err(wait) = self.limiter.check(&principal.id) {
             self.stats.errors.fetch_add(1, Ordering::Relaxed);
-            return Reply::Response(error_response(Some(&id), &McpError::rate_limited(wait.as_millis() as u64 + 1)));
+            { let e = McpError::rate_limited(wait.as_millis() as u64 + 1); return Reply::Response(error_response(Some(&id), &e), e.http_status); }
         }
         let ctx = RequestContext::new(Some(id.clone()), method, meta, principal, transport, sink, cancel);
         let started = Instant::now();
@@ -181,12 +182,12 @@ impl Core {
             return Reply::NoResponse;
         }
         match outcome {
-            Ok(Dispatched::Result(v)) => Reply::Response(result_response(&id, v)),
+            Ok(Dispatched::Result(v)) => Reply::Response(result_response(&id, v), 200),
             Ok(Dispatched::Subscription(s)) => Reply::Subscription(s),
             Err(e) => {
                 self.stats.errors.fetch_add(1, Ordering::Relaxed);
                 crate::log_debug!("mcp", "request failed", method = method, code = e.code, error = e.message);
-                Reply::Response(error_response(Some(&id), &e))
+                Reply::Response(error_response(Some(&id), &e), e.http_status)
             }
         }
     }

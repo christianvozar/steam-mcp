@@ -1,7 +1,7 @@
 //! Inbound HTTP/1.1 request parsing and response writing, shared by the MCP
 //! Streamable HTTP transport and the test harness.
 
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufReader, Read, Write};
 use std::net::SocketAddr;
 
 use super::{Framing, Headers, framing, read_body, read_head, status_text};
@@ -42,10 +42,9 @@ impl RequestError {
 }
 
 /// Reads one request. `Ok(None)` means the peer closed the connection.
-/// `writer` is used for `Expect: 100-continue`.
-pub fn read_request<R: BufRead, W: Write>(
-    reader: &mut R,
-    writer: &mut W,
+/// `Expect: 100-continue` is answered through the reader's inner stream.
+pub fn read_request<S: Read + Write>(
+    reader: &mut BufReader<S>,
     max_head: usize,
     max_body: usize,
 ) -> Result<Option<HttpRequest>, RequestError> {
@@ -84,7 +83,8 @@ pub fn read_request<R: BufRead, W: Write>(
         }
     }
     if headers.has_token("expect", "100-continue") && fr != Framing::None {
-        let _ = writer.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").and_then(|_| writer.flush());
+        let w = reader.get_mut();
+        let _ = w.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").and_then(|_| w.flush());
     }
     let body = read_body(reader, &fr, max_body).map_err(|e| {
         if e.to_string().contains("limit") { RequestError::new(413, e.to_string()) } else { RequestError::new(400, e.to_string()) }
@@ -174,23 +174,42 @@ pub fn write_sse_comment(w: &mut impl Write) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::BufReader;
+
+    /// In-memory duplex stream for tests.
+    struct Duplex(std::io::Cursor<Vec<u8>>, Vec<u8>);
+    impl Read for Duplex {
+        fn read(&mut self, b: &mut [u8]) -> io::Result<usize> {
+            self.0.read(b)
+        }
+    }
+    impl Write for Duplex {
+        fn write(&mut self, b: &[u8]) -> io::Result<usize> {
+            self.1.extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    fn duplex(raw: &[u8]) -> BufReader<Duplex> {
+        BufReader::new(Duplex(std::io::Cursor::new(raw.to_vec()), Vec::new()))
+    }
 
     #[test]
     fn parse_request() {
-        let raw = b"POST http://localhost:8080/mcp?x=1 HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\n\r\n2\r\n{}\r\n0\r\n\r\n";
-        let mut r = BufReader::new(&raw[..]);
-        let mut sink = Vec::new();
-        let req = read_request(&mut r, &mut sink, 8192, 1024).unwrap().unwrap();
+        let raw = b"POST http://localhost:8080/mcp?x=1 HTTP/1.1\r\nHost: localhost\r\nExpect: 100-continue\r\nTransfer-Encoding: chunked\r\n\r\n2\r\n{}\r\n0\r\n\r\n";
+        let mut r = duplex(raw);
+        let req = read_request(&mut r, 8192, 1024).unwrap().unwrap();
+        assert!(r.get_ref().1.starts_with(b"HTTP/1.1 100 Continue"));
         assert_eq!(req.method, "POST");
         assert_eq!(req.path, "/mcp");
         assert_eq!(req.query.as_deref(), Some("x=1"));
         assert_eq!(req.body, b"{}");
         assert!(req.keep_alive());
         let raw = b"GET / HTTP/1.1\r\n\r\n";
-        assert_eq!(read_request(&mut BufReader::new(&raw[..]), &mut sink, 8192, 10).unwrap_err().status, 400);
+        assert_eq!(read_request(&mut duplex(raw), 8192, 10).unwrap_err().status, 400);
         let raw = b"POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 100\r\n\r\n";
-        assert_eq!(read_request(&mut BufReader::new(&raw[..]), &mut sink, 8192, 10).unwrap_err().status, 413);
+        assert_eq!(read_request(&mut duplex(raw), 8192, 10).unwrap_err().status, 413);
     }
 
     #[test]
