@@ -131,6 +131,7 @@ impl ToolDef {
             "title" => self.title,
             "description" => self.description.as_str(),
             "inputSchema" => self.input_schema.clone(),
+            "icons" => crate::arr![super::protocol::scope_icon(self.scope)],
             "annotations" => obj! {
                 "title" => self.title,
                 "readOnlyHint" => self.hints.read_only,

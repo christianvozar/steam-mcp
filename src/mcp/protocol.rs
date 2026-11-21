@@ -280,6 +280,45 @@ pub fn server_icon() -> Value {
     }
 }
 
+fn svg_icon(body: &str) -> Value {
+    let svg = format!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#1b2838"/>{body}</svg>"##
+    );
+    obj! {
+        "src" => format!("data:image/svg+xml;base64,{}", crate::util::encoding::b64_encode(svg.as_bytes())),
+        "mimeType" => "image/svg+xml",
+        "sizes" => crate::arr!["any"],
+    }
+}
+
+/// Inline icon for a scope category (tools, resources and prompts use these).
+/// Icons are self-contained data URIs, so clients never fetch third-party URLs.
+pub fn scope_icon(scope: &str) -> Value {
+    let stroke = r##"fill="none" stroke="#66c0f4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round""##;
+    match scope {
+        // Bar chart: financial reporting.
+        "steam:financial" => svg_icon(&format!(
+            r##"<path {stroke} d="M6 18V11M12 18V6M18 18v-4"/>"##
+        )),
+        // Wrench: partner tooling.
+        "steam:partner" => svg_icon(&format!(
+            r##"<path {stroke} d="M14.5 6.5a3.5 3.5 0 0 0-4.6 4.6L5 16l3 3 4.9-4.9a3.5 3.5 0 0 0 4.6-4.6l-2 2-2-2z"/>"##
+        )),
+        // Pencil: state-changing operations.
+        "steam:write" => svg_icon(&format!(
+            r##"<path {stroke} d="M5 19l1-4L15 6l3 3-9 9zM13 8l3 3"/>"##
+        )),
+        // Gear-like dial: administration.
+        "steam:admin" => svg_icon(&format!(
+            r##"<circle {stroke} cx="12" cy="12" r="3"/><path {stroke} d="M12 4v2M12 18v2M4 12h2M18 12h2M6.3 6.3l1.4 1.4M16.3 16.3l1.4 1.4M6.3 17.7l1.4-1.4M16.3 7.7l1.4-1.4"/>"##
+        )),
+        // Globe: public data.
+        _ => svg_icon(&format!(
+            r##"<circle {stroke} cx="12" cy="12" r="7"/><path {stroke} d="M5 12h14M12 5c2 2 3 4.5 3 7s-1 5-3 7c-2-2-3-4.5-3-7s1-5 3-7z"/>"##
+        )),
+    }
+}
+
 /// Builds a JSON-RPC success response, adding `resultType` and serverInfo.
 pub fn result_response(id: &Value, mut result: Value) -> Value {
     if let Value::Object(m) = &mut result {
@@ -361,6 +400,23 @@ mod tests {
             INVALID_PARAMS
         );
         assert!(RequestMeta::parse(None).is_err());
+    }
+
+    #[test]
+    fn icons_are_data_uris() {
+        for s in [
+            "steam:public",
+            "steam:partner",
+            "steam:financial",
+            "steam:write",
+            "steam:admin",
+        ] {
+            let icon = scope_icon(s);
+            let src = icon["src"].as_str().unwrap();
+            assert!(src.starts_with("data:image/svg+xml;base64,"));
+            let svg = crate::util::encoding::b64_decode(&src[26..]).unwrap();
+            assert!(String::from_utf8(svg).unwrap().starts_with("<svg"));
+        }
     }
 
     #[test]

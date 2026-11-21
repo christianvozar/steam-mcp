@@ -456,7 +456,7 @@ pub fn list(core: &Arc<Core>, ctx: &RequestContext) -> Vec<Value> {
     let mut out: Vec<Value> = static_resources()
         .into_iter()
         .filter(|r| available(core, r.tool, ctx))
-        .map(|r| obj! { "uri" => r.uri, "name" => r.name, "title" => r.title, "description" => r.description, "mimeType" => "application/json", "annotations" => annotations(r.priority) })
+        .map(|r| obj! { "uri" => r.uri, "name" => r.name, "title" => r.title, "description" => r.description, "mimeType" => "application/json", "annotations" => annotations(r.priority), "icons" => tool_icons(r.tool) })
         .collect();
     if available(core, "steam_partner_list_apps", ctx)
         && available(core, "steam_get_app_overview", ctx)
@@ -487,6 +487,7 @@ pub fn list(core: &Arc<Core>, ctx: &RequestContext) -> Vec<Value> {
                     "description" => format!("Overview of your {} {}", kind.to_ascii_lowercase(), if name.is_empty() { appid.to_string() } else { name }),
                     "mimeType" => "application/json",
                     "annotations" => annotations(0.8),
+                    "icons" => crate::arr![super::protocol::scope_icon(scopes::PARTNER)],
                 });
             }
         }
@@ -494,11 +495,19 @@ pub fn list(core: &Arc<Core>, ctx: &RequestContext) -> Vec<Value> {
     out
 }
 
+/// Icons for a resource, matching its backing tool's scope.
+fn tool_icons(tool: &str) -> Value {
+    let scope = tool_requirements(tool)
+        .map(|(s, _)| s)
+        .unwrap_or(scopes::PUBLIC);
+    crate::arr![super::protocol::scope_icon(scope)]
+}
+
 pub fn list_templates(core: &Arc<Core>, ctx: &RequestContext) -> Vec<Value> {
     templates()
         .into_iter()
         .filter(|t| available(core, t.tool, ctx))
-        .map(|t| obj! { "uriTemplate" => t.template, "name" => t.name, "title" => t.title, "description" => t.description, "mimeType" => "application/json", "annotations" => annotations(0.5) })
+        .map(|t| obj! { "uriTemplate" => t.template, "name" => t.name, "title" => t.title, "description" => t.description, "mimeType" => "application/json", "annotations" => annotations(0.5), "icons" => tool_icons(t.tool) })
         .collect()
 }
 
