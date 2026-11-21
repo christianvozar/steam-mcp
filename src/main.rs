@@ -115,6 +115,46 @@ fn main() {
             .unwrap_or_else(|| "none".into()),
     );
 
+    // SIGTERM/SIGINT: stop accepting work, complete subscriptions, drain
+    // in-flight requests within the grace period, persist the cache, exit.
+    // A second signal exits immediately.
+    steam_mcp::util::signal::install();
+    {
+        let core = core.clone();
+        let grace = std::time::Duration::from_secs(cfg.shutdown_grace_secs);
+        std::thread::Builder::new()
+            .name("signals".into())
+            .spawn(move || {
+                use steam_mcp::util::signal;
+                loop {
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    let Some(sig) = signal::received() else {
+                        continue;
+                    };
+                    signal::reset();
+                    steam_mcp::log_info!(
+                        "main",
+                        "termination signal received",
+                        signal = signal::name(sig)
+                    );
+                    std::thread::spawn(|| {
+                        loop {
+                            std::thread::sleep(std::time::Duration::from_millis(50));
+                            if signal::received().is_some() {
+                                eprintln!("steam-mcp: second signal received; exiting immediately");
+                                std::process::exit(130);
+                            }
+                        }
+                    });
+                    core.begin_shutdown();
+                    core.drain(grace);
+                    core.finish_shutdown();
+                    std::process::exit(0);
+                }
+            })
+            .unwrap_or_else(|e| fail(&format!("could not start signal handler: {e}")));
+    }
+
     let http_handle = cfg.http_bind.clone().map(|bind| {
         let server =
             Arc::new(transport::http::HttpServer::new(core.clone()).unwrap_or_else(|e| fail(&e)));
@@ -135,13 +175,17 @@ fn main() {
             fail(&format!("stdio transport error: {e}"));
         }
         // Stdio EOF ends the process even if HTTP is also running.
-        core.shutdown();
+        core.begin_shutdown();
+        core.drain(std::time::Duration::from_secs(cfg.shutdown_grace_secs));
+        core.finish_shutdown();
         return;
     }
     if let Some(h) = http_handle {
         let _ = h.join();
     }
-    core.shutdown();
+    core.begin_shutdown();
+    core.drain(std::time::Duration::from_secs(cfg.shutdown_grace_secs));
+    core.finish_shutdown();
 }
 
 fn fail(msg: &str) -> ! {

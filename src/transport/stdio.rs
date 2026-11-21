@@ -243,11 +243,15 @@ pub fn serve<R: Read, W: Write + Send + 'static>(
         }
     }
     crate::log_info!("stdio", "stdin closed; shutting down");
-    // Stop accepting work, end subscriptions gracefully, let workers finish.
-    core.shutdown();
-    let deadline = Instant::now() + Duration::from_secs(10);
+    // Stop accepting work, end subscriptions gracefully, let workers finish,
+    // then persist the cache.
+    core.begin_shutdown();
+    let grace = Duration::from_secs(core.config.get().shutdown_grace_secs);
+    let deadline = Instant::now() + grace;
     while inflight.count.load(Ordering::SeqCst) > 0 && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(20));
     }
+    core.drain(deadline.saturating_duration_since(Instant::now()));
+    core.finish_shutdown();
     Ok(())
 }

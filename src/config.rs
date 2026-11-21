@@ -167,6 +167,7 @@ pub struct Config {
     pub max_connections: usize,
     pub max_request_bytes: usize,
     pub sse_keepalive_secs: u64,
+    pub shutdown_grace_secs: u64,
 
     pub auth: AuthConfig,
 
@@ -337,6 +338,10 @@ pub const KEYS: &[(&str, &str)] = &[
     (
         "STEAM_MCP_SSE_KEEPALIVE",
         "Seconds between SSE keep-alive comments (default 15)",
+    ),
+    (
+        "STEAM_MCP_SHUTDOWN_GRACE",
+        "Seconds to let in-flight requests finish on SIGTERM/SIGINT or stdin EOF (default 10)",
     ),
     (
         "STEAM_MCP_AUTH_MODE",
@@ -677,6 +682,11 @@ impl Config {
                 15,
             )?
             .max(1),
+            shutdown_grace_secs: num(
+                get("STEAM_MCP_SHUTDOWN_GRACE"),
+                "STEAM_MCP_SHUTDOWN_GRACE",
+                10,
+            )?,
             auth: AuthConfig {
                 mode,
                 static_tokens,

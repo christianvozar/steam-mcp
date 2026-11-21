@@ -4,6 +4,7 @@ pub mod crypto;
 pub mod encoding;
 pub mod log;
 pub mod ratelimit;
+pub mod signal;
 pub mod time;
 pub mod uritemplate;
 

@@ -56,7 +56,19 @@ pub struct Core {
     pub started: Instant,
     pub stats: ServerStats,
     pub stop: Arc<AtomicBool>,
+    /// Requests currently being processed (all transports).
+    pub inflight: AtomicU64,
+    persisted: AtomicBool,
     watch_state: Mutex<WatchState>,
+}
+
+/// Decrements the in-flight counter when a request finishes (even on panic).
+struct InflightGuard<'a>(&'a AtomicU64);
+
+impl Drop for InflightGuard<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 #[derive(Default)]
@@ -102,6 +114,8 @@ impl Core {
             started: Instant::now(),
             stats: ServerStats::default(),
             stop: Arc::new(AtomicBool::new(false)),
+            inflight: AtomicU64::new(0),
+            persisted: AtomicBool::new(false),
             watch_state: Mutex::new(WatchState::default()),
             config,
             steam,
@@ -222,6 +236,13 @@ impl Core {
                 return Reply::Response(error_response(Some(&id), &e), e.http_status);
             }
         }
+        if self.stop.load(Ordering::SeqCst) {
+            let e = McpError::internal("Server is shutting down; retry against another instance")
+                .http(503);
+            return Reply::Response(error_response(Some(&id), &e), e.http_status);
+        }
+        self.inflight.fetch_add(1, Ordering::SeqCst);
+        let _inflight = InflightGuard(&self.inflight);
         let ctx = RequestContext::new(
             Some(id.clone()),
             method,
@@ -1144,11 +1165,52 @@ impl Core {
 
     /// Graceful shutdown: end subscriptions, cancel tasks, persist the cache.
     pub fn shutdown(&self) {
+        self.begin_shutdown();
+        self.finish_shutdown();
+    }
+
+    /// Phase 1: stop accepting work, end subscriptions gracefully and cancel
+    /// tasks. In-flight requests keep running.
+    pub fn begin_shutdown(&self) {
         if self.stop.swap(true, Ordering::SeqCst) {
             return;
         }
+        crate::log_info!(
+            "main",
+            "shutting down",
+            inflight = self.inflight.load(Ordering::SeqCst),
+            subscriptions = self.hub.len()
+        );
         self.hub.shutdown();
         self.tasks.cancel_all();
+    }
+
+    /// Waits until no request is in flight or `grace` elapses. Returns the
+    /// number of requests still running.
+    pub fn drain(&self, grace: Duration) -> u64 {
+        let deadline = Instant::now() + grace;
+        loop {
+            let n = self.inflight.load(Ordering::SeqCst);
+            if n == 0 || Instant::now() >= deadline {
+                if n > 0 {
+                    crate::log_warn!(
+                        "main",
+                        "grace period elapsed with requests in flight",
+                        inflight = n
+                    );
+                }
+                return n;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// Phase 2: persist the cache (once).
+    pub fn finish_shutdown(&self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if self.persisted.swap(true, Ordering::SeqCst) {
+            return;
+        }
         match self.steam.cache.persist() {
             Ok(n) if n > 0 => crate::log_info!("cache", "persisted cache on shutdown", entries = n),
             Ok(_) => {}
