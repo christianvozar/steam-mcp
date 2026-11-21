@@ -58,7 +58,9 @@ pub struct Core {
     pub stop: Arc<AtomicBool>,
     /// Requests currently being processed (all transports).
     pub inflight: AtomicU64,
-    persisted: AtomicBool,
+    /// Set once the final cache snapshot is written; the mutex makes a
+    /// concurrent caller wait for an in-progress write.
+    persisted: Mutex<bool>,
     watch_state: Mutex<WatchState>,
 }
 
@@ -115,7 +117,7 @@ impl Core {
             stats: ServerStats::default(),
             stop: Arc::new(AtomicBool::new(false)),
             inflight: AtomicU64::new(0),
-            persisted: AtomicBool::new(false),
+            persisted: Mutex::new(false),
             watch_state: Mutex::new(WatchState::default()),
             config,
             steam,
@@ -1208,9 +1210,11 @@ impl Core {
     /// Phase 2: persist the cache (once).
     pub fn finish_shutdown(&self) {
         self.stop.store(true, Ordering::SeqCst);
-        if self.persisted.swap(true, Ordering::SeqCst) {
+        let mut done = self.persisted.lock().unwrap_or_else(|e| e.into_inner());
+        if *done {
             return;
         }
+        *done = true;
         match self.steam.cache.persist() {
             Ok(n) if n > 0 => crate::log_info!("cache", "persisted cache on shutdown", entries = n),
             Ok(_) => {}
