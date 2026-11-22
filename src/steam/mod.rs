@@ -476,7 +476,28 @@ impl SteamClient {
                                 }
                             };
                         }
-                        404 => return Ok(Fetched::Negative(Value::Null)),
+                        404 => {
+                            // Steam answers unknown methods/versions with a 404
+                            // HTML page; surface that instead of "no data" so a
+                            // wrong or retired endpoint version is visible.
+                            let body = resp.text();
+                            let json_body = body.trim_start().starts_with(['{', '[']);
+                            if call.host != Host::Store && !json_body {
+                                self.stats.errors.fetch_add(1, Ordering::Relaxed);
+                                return Err(FetchError {
+                                    message: format!(
+                                        "Steam does not recognise {log_path} (method or version is wrong or retired): {}",
+                                        crate::util::truncate(
+                                            &crate::util::strip_markup(&body),
+                                            160
+                                        )
+                                    ),
+                                    status: Some(404),
+                                    transient: false,
+                                });
+                            }
+                            return Ok(Fetched::Negative(Value::Null));
+                        }
                         401 | 403 => {
                             self.stats.errors.fetch_add(1, Ordering::Relaxed);
                             let hint = if resp.status == 401 {
@@ -523,6 +544,21 @@ impl SteamClient {
                                 },
                                 ra,
                             )
+                        }
+                        300..=399 => {
+                            // Steam API endpoints never legitimately redirect.
+                            // The storefront answers throttled or blocked
+                            // clients with a redirect to its home page, so
+                            // treat it as transient (stale data is served).
+                            self.stats.errors.fetch_add(1, Ordering::Relaxed);
+                            let to = resp.headers.get("location").unwrap_or("?").to_string();
+                            return Err(FetchError {
+                                message: format!(
+                                    "Steam redirected {log_path} to {to} instead of returning data; the storefront is throttling or refusing this network"
+                                ),
+                                status: Some(resp.status),
+                                transient: true,
+                            });
                         }
                         other => {
                             self.stats.errors.fetch_add(1, Ordering::Relaxed);

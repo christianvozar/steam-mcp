@@ -394,6 +394,12 @@ pub fn steam_error(e: SteamError) -> ToolOutcome {
         ErrorKind::Upstream => " Steam may be having issues; retry shortly.",
         ErrorKind::Network => " Steam could not be reached; retry shortly.",
     };
+    // Endpoint-level problems are not fixable by changing IDs.
+    let advice = if e.message.contains("does not recognise") {
+        " Use steam_get_supported_api_list to find current methods and versions."
+    } else {
+        advice
+    };
     tool_error(format!("{}{advice}", e.message))
 }
 

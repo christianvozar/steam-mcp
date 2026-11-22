@@ -86,6 +86,8 @@ fn respond(
         }
         "/ISteamNews/GetNewsForApp/v2/" => (200, obj! { "appnews" => obj! { "appid" => 570, "count" => 1, "newsitems" => steam_mcp::arr![obj! { "gid" => "1", "title" => "Patch 7.37", "url" => "https://x", "contents" => "<p>Fixes</p>", "date" => 1785196800u64, "feedlabel" => "Community Announcements" }] } }.to_string()),
         "/ISteamUserStats/GetGlobalAchievementPercentagesForApp/v2/" => (200, obj! { "achievementpercentages" => obj! { "achievements" => steam_mcp::arr![obj! { "name" => "EASY", "percent" => "91.5" }, obj! { "name" => "HARD", "percent" => 0.4 }] } }.to_string()),
+        // Mirrors the live storefront refusing a client: redirect to the home page.
+        "/appreviews/9" => (302, String::new()),
         p if p.starts_with("/appreviews/") => {
             let cursor = q.get("cursor").cloned().unwrap_or_default();
             let page = if cursor == "*" { 0 } else { cursor.trim_start_matches("c").parse::<u64>().unwrap_or(0) };
