@@ -5,6 +5,7 @@
 //! an MRTR `InputRequiredResult`, or a protocol error.
 
 pub mod admin;
+pub mod extended;
 pub mod partner;
 pub mod public;
 pub mod store;
@@ -173,6 +174,7 @@ impl ToolDef {
 pub fn all_tools() -> Vec<ToolDef> {
     let mut v = public::tools();
     v.extend(store::tools());
+    v.extend(extended::tools());
     v.extend(partner::tools());
     v.extend(admin::tools());
     v
