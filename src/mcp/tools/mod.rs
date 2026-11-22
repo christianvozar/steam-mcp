@@ -9,6 +9,7 @@ pub mod extended;
 pub mod partner;
 pub mod public;
 pub mod store;
+pub mod writes;
 
 use std::sync::Arc;
 
@@ -175,6 +176,7 @@ pub fn all_tools() -> Vec<ToolDef> {
     let mut v = public::tools();
     v.extend(store::tools());
     v.extend(extended::tools());
+    v.extend(writes::tools());
     v.extend(partner::tools());
     v.extend(admin::tools());
     v
