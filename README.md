@@ -300,9 +300,8 @@ The run calls every read-only tool whose credential is set and writes `target/li
 ## Development
 
 ```sh
-cargo test            # unit tests, plus end-to-end tests against a mock Steam API (stdio and HTTP)
-cargo clippy --all-targets
-cargo fmt --check
+scripts/check.sh         # fmt, clippy, tests and release build (the project's quality gate)
+scripts/check.sh --fuzz  # also run an extended multi-seed fuzz pass
 ```
 
 The integration tests start a mock Steam server and drive the dispatcher, the HTTP transport (over real sockets) and the stdio binary (as a subprocess). They cover:

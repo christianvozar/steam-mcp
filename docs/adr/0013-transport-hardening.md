@@ -23,4 +23,4 @@ A gap review and seeded fuzzing (`tests/fuzz.rs`) found four weaknesses:
 
 - Clients that half-close their write side (`shutdown(SHUT_WR)`) after sending a request are treated as having cancelled it. HTTP/1.1 clients do not normally do this, and the spec treats closing the stream as cancellation.
 - A request body that takes longer than the read deadline to upload is rejected. Raise the setting for slow links.
-- The fuzz suite runs in CI with fixed seeds, and can be run with other seeds and larger iteration counts locally.
+- The fuzz suite runs with fixed seeds in every `cargo test`. `scripts/check.sh --fuzz` runs it with more seeds and iterations.
