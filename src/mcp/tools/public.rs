@@ -1703,17 +1703,20 @@ fn app_overview(env: &ToolEnv, args: &Map) -> ToolOutcome {
         ));
     }
     let text = format!(
-        "{} ({appid}): {} players now; reviews {} ({}% positive of {}); {}.",
+        "{} ({appid}): {} players now; reviews {}; {}.",
         v.at(&["details", "name"]).as_str().unwrap_or("Unknown app"),
         v["currentPlayers"]
             .as_u64()
             .map(fmt_num)
             .unwrap_or_else(|| "n/a".into()),
-        v.at(&["reviews", "reviewScoreDescription"])
-            .as_str()
-            .unwrap_or("n/a"),
-        v.at(&["reviews", "positivePercent"]),
-        v.at(&["reviews", "totalReviews"]),
+        match v.at(&["reviews", "reviewScoreDescription"]).as_str() {
+            Some(desc) => format!(
+                "{desc} ({}% positive of {})",
+                v.at(&["reviews", "positivePercent"]),
+                v.at(&["reviews", "totalReviews"])
+            ),
+            None => "unavailable".into(),
+        },
         v.at(&["details", "price", "final"])
             .as_str()
             .map(|p| format!("price {p}"))
@@ -1910,7 +1913,7 @@ pub fn tools() -> Vec<ToolDef> {
                     ],
                     &["query"],
                 ),
-                KeyKind::None,
+                KeyKind::Public,
                 search_apps,
             )
         },

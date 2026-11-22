@@ -61,10 +61,19 @@ fn fetch_catalog(client: &Arc<SteamClient>) -> Result<Fetched, FetchError> {
         ),
     };
     let mut apps: Vec<Value> = Vec::new();
-    let source;
-    if client.has_key(KeyKind::Public) {
+    // IStoreService/GetAppList is the only maintained catalog endpoint and it
+    // requires a key. (ISteamApps/GetAppList/v2 was removed by Valve and now
+    // answers "Method not found", verified live 2026-11-22.)
+    if !client.has_key(KeyKind::Public) {
+        return Err(FetchError {
+            message: "Searching the app catalog requires a Steam Web API key; set STEAM_API_KEY (or STEAM_PUBLISHER_KEY)".into(),
+            status: Some(0),
+            transient: false,
+        });
+    }
+    let source = "IStoreService/GetAppList";
+    {
         // IStoreService/GetAppList is the maintained, paged catalog endpoint.
-        source = "IStoreService/GetAppList";
         let mut last_appid: u64 = 0;
         for _page in 0..40 {
             let call = Call::get(
@@ -95,24 +104,6 @@ fn fetch_catalog(client: &Arc<SteamClient>) -> Result<Fetched, FetchError> {
             ) {
                 (Some(true), Some(next)) if next > last_appid => last_appid = next,
                 _ => break,
-            }
-        }
-    } else {
-        source = "ISteamApps/GetAppList";
-        let call = Call::get(
-            Host::Public,
-            "/ISteamApps/GetAppList/v2/",
-            KeyKind::None,
-            "static",
-        );
-        let v = client.call_uncached(&call).map_err(to_fetch)?;
-        if let Some(list) = v.at(&["applist", "apps"]).as_array() {
-            for a in list {
-                if let (Some(id), Some(name)) = (a["appid"].as_u64(), a["name"].as_str()) {
-                    if !name.trim().is_empty() {
-                        apps.push(crate::arr![id, name]);
-                    }
-                }
             }
         }
     }

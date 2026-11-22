@@ -1245,3 +1245,33 @@ fn config_reload_notifies_list_changes() {
     );
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn storefront_redirects_are_reported_not_parsed() {
+    let mock = start_mock();
+    let core = core_with(&mock, &[]);
+    let r = call_tool(&core, "steam_get_review_summary", obj! { "appid" => 9 });
+    assert_eq!(r["result"]["isError"].as_bool(), Some(true));
+    let text = r["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(text.contains("redirected"), "{text}");
+}
+
+#[test]
+fn app_search_requires_a_key() {
+    let mock = start_mock();
+    let core = core_with(&mock, &[("STEAM_API_KEY", ""), ("STEAM_PUBLISHER_KEY", "")]);
+    let (r, _) = send(
+        &core,
+        &request(
+            1,
+            "tools/call",
+            obj! { "name" => "steam_search_apps", "arguments" => obj! { "query" => "dota" } },
+            obj! {},
+        ),
+    );
+    assert_eq!(
+        r["error"]["code"].as_i64(),
+        Some(-32602),
+        "hidden without a key: {r}"
+    );
+}
