@@ -395,7 +395,9 @@ pub fn steam_error(e: SteamError) -> ToolOutcome {
         ErrorKind::Network => " Steam could not be reached; retry shortly.",
     };
     // Endpoint-level problems are not fixable by changing IDs.
-    let advice = if e.message.contains("does not recognise") {
+    let advice = if e.message.contains("redirected") {
+        " Steam is refusing or throttling this network; cached data is served when available."
+    } else if e.message.contains("does not recognise") {
         " Use steam_get_supported_api_list to find current methods and versions."
     } else {
         advice
