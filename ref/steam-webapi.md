@@ -159,6 +159,25 @@ All are POST, never cached, and need `STEAM_MCP_ENABLE_WRITES` plus a confirmati
 | `IGameServersService/DeleteAccount/v1` | api | public | account list and info | `steam_delete_game_server_account` |
 | `IGameServersService/SetBanStatus/v1` | partner | publisher | account list and info | `steam_partner_set_game_server_ban` |
 
+## Partner writes (added 2026-11-22)
+
+All are POST on the partner host with a publisher key, never cached, and gated by ADR 0014. Existence was probed without a key: 400/403 versus 404. Required parameters came from Steam's errors where it checks them before the key. InitTxn v3 needs `orderid`, `steamid`, `appid`, `itemcount`, `language`, `currency`, `itemid[i]`, `qty[i]`, `amount[i]` and `description[i]`. FinalizeTxn and RefundTxn v2 need `orderid` and `appid`. CancelAgreement needs `steamid`, `agreementid` and `appid`; AdjustAgreement also needs `nextprocessdate`; ProcessAgreement also needs `orderid`, `amount` and `currency`. The read methods behave the same way: QueryTxn v3 needs `appid`, and GetReport v5 needs `appid` and `time`. The Inventory Service, workshop and SetUserStatsForGame methods check the key first, so their parameters follow Valve's documentation.
+
+| Endpoint | Tool | Purges |
+| --- | --- | --- |
+| `IInventoryService/AddItem/v1` (`itemdefid[i]`) | `steam_partner_add_inventory_items` | inventory, quantities, history for the user |
+| `IInventoryService/AddPromoItem/v1` | `steam_partner_add_promo_item` | same |
+| `IInventoryService/ConsumeItem/v1` | `steam_partner_consume_inventory_item` | same |
+| `IInventoryService/ModifyItems/v1` (`input_json`) | `steam_partner_modify_inventory_items` | same |
+| `ISteamMicroTxn[Sandbox]/InitTxn/v3` | `steam_partner_init_microtxn` | QueryTxn for the order, agreements, reports |
+| `ISteamMicroTxn[Sandbox]/FinalizeTxn/v2`, `RefundTxn/v2` | `steam_partner_finalize_microtxn`, `steam_partner_refund_microtxn` | QueryTxn for the order, reports |
+| `ISteamMicroTxn[Sandbox]/CancelAgreement`, `AdjustAgreement`, `ProcessAgreement/v1` | `steam_partner_cancel_agreement`, `_adjust_agreement`, `_process_agreement` | agreements for the user, reports |
+| `ISteamUserStats/SetUserStatsForGame/v1` (`count`, `name[i]`, `value[i]`) | `steam_partner_set_user_stats` | user stats and achievements for the user and app |
+| `IPublishedFileService/SetDeveloperMetadata`, `UpdateTags`, `UpdateBanStatus`, `UpdateIncompatibleStatus/v1` | workshop moderation tools | details of the item, QueryFiles |
+| `IPublishedFileService/UpdateAppUGCBan/v1` | `steam_partner_ban_user_ugc` | none |
+
+Steam reports microtransaction failures inside an HTTP 200 as `result: "Failure"` with an `error` object. The write gate treats those, numeric `result` values other than 1, and `success: false` as tool errors.
+
 ## Partner Web API (publisher key, `partner.steam-api.com`)
 
 | Endpoint | Cache | Used by | Verified |

@@ -19,6 +19,8 @@ All new writes go through `run_write` in `src/mcp/tools/writes.rs`. Each tool on
 6. The cached reads the write affects are purged, matched on exact `name=value` pairs in the cache key.
 7. An `audit` log line records the action, its non-secret subject and the principal. Secret response fields such as `login_token` are returned to the caller once and flagged in the summary. They are never logged and never cached.
 
+Microtransaction and agreement tools take a required `sandbox` boolean instead of defaulting to either interface. The confirmation prompt names the mode (SANDBOX or LIVE) and lists every line item with the total, and the user confirms by typing the order or agreement ID.
+
 ## Consequences
 
 - A new write needs only a `WriteOp` and a schema, and it gets every safeguard above.
