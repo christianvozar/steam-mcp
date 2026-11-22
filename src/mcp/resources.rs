@@ -90,6 +90,13 @@ fn builds_args(v: &BTreeMap<String, String>) -> Result<Map, McpError> {
     Ok(m)
 }
 
+fn store_item_args(v: &BTreeMap<String, String>) -> Result<Map, McpError> {
+    let appid = appid_args(v)?.get("appid").cloned().unwrap_or_default();
+    let mut m = Map::new();
+    m.insert("appids", crate::arr![appid]);
+    Ok(m)
+}
+
 fn catalog_args(_: &BTreeMap<String, String>) -> Result<Map, McpError> {
     // A cheap search over the cached catalog reports its size and freshness.
     let mut m = Map::new();
@@ -119,6 +126,46 @@ pub fn static_resources() -> Vec<ResourceSpec> {
             args: no_args,
             cache_scope: "public",
             priority: 0.5,
+        },
+        ResourceSpec {
+            uri: "steam://charts/top-concurrent",
+            name: "top-concurrent",
+            title: "Top Games by Concurrent Players",
+            description: "Live chart of the games with the most players in-game right now.",
+            tool: "steam_get_top_concurrent_games",
+            args: no_args,
+            cache_scope: "public",
+            priority: 0.6,
+        },
+        ResourceSpec {
+            uri: "steam://charts/weekly-top-sellers",
+            name: "weekly-top-sellers",
+            title: "Weekly Top Sellers",
+            description: "The store's weekly top sellers for the default country.",
+            tool: "steam_get_weekly_top_sellers",
+            args: no_args,
+            cache_scope: "public",
+            priority: 0.6,
+        },
+        ResourceSpec {
+            uri: "steam://charts/steam-deck",
+            name: "steam-deck-top",
+            title: "Top Steam Deck Games",
+            description: "The most played games on Steam Deck.",
+            tool: "steam_get_top_steam_deck_games",
+            args: no_args,
+            cache_scope: "public",
+            priority: 0.5,
+        },
+        ResourceSpec {
+            uri: "steam://store/tags",
+            name: "store-tags",
+            title: "Store Tags",
+            description: "All store tag IDs and names.",
+            tool: "steam_get_store_tags",
+            args: no_args,
+            cache_scope: "public",
+            priority: 0.3,
         },
         ResourceSpec {
             uri: "steam://charts/most-played",
@@ -175,6 +222,15 @@ pub struct TemplateSpec {
 
 pub fn templates() -> Vec<TemplateSpec> {
     vec![
+        TemplateSpec {
+            template: "steam://app/{appid}/store",
+            name: "app-store-item",
+            title: "Store Item",
+            description: "Price, review score, tags, release and platform support from the store browse service (no key needed).",
+            tool: "steam_get_store_items",
+            args: store_item_args,
+            cache_scope: "public",
+        },
         TemplateSpec {
             template: "steam://app/{appid}/details",
             name: "app-details",
