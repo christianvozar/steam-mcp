@@ -190,6 +190,12 @@ fn respond(
         "/ISteamLeaderboards/ResetLeaderboard/v1/" => (200, obj! { "result" => obj! { "result" => 1 } }.to_string()),
         "/ISteamLeaderboards/DeleteLeaderboard/v1/" => (200, obj! { "result" => obj! { "result" => 8, "message" => "Leaderboard not found" } }.to_string()),
         "/IGameServersService/CreateAccount/v1/" => (200, obj! { "response" => obj! { "steamid" => "85568392920040001", "login_token" => "SECRETGSLT0123456789" } }.to_string()),
+        "/IInventoryService/AddItem/v1/" => (200, obj! { "response" => obj! { "item_json" => "[{\"itemid\":\"9001\"}]" } }.to_string()),
+        "/ISteamMicroTxnSandbox/InitTxn/v3/" => (200, obj! { "response" => obj! { "result" => "OK", "params" => obj! { "orderid" => "42", "transid" => "777" } } }.to_string()),
+        "/ISteamMicroTxn/RefundTxn/v2/" => (200, obj! { "response" => obj! { "result" => "Failure", "error" => obj! { "errorcode" => 100, "errordesc" => "Order not found" } } }.to_string()),
+        "/ISteamMicroTxnSandbox/QueryTxn/v3/" => (200, obj! { "response" => obj! { "result" => "OK", "params" => obj! { "orderid" => "42", "status" => "Approved", "items" => steam_mcp::arr![obj! { "itemid" => 5, "qty" => 1, "amount" => 199 }] } } }.to_string()),
+        "/ISteamUserStats/SetUserStatsForGame/v1/" => (200, obj! { "result" => obj! { "result" => 1 } }.to_string()),
+        "/IPublishedFileService/UpdateTags/v1/" => (200, obj! { "response" => obj! {} }.to_string()),
         "/jwks" => (200, mock.jwks.lock().unwrap().clone()),
         "/introspect" => {
             let expected = format!(

@@ -1578,3 +1578,120 @@ fn gated_leaderboard_and_game_server_writes() {
         "{posts:?}"
     );
 }
+
+#[test]
+fn gated_partner_commerce_stats_and_workshop_writes() {
+    let mock = start_mock();
+    let core = core_with(&mock, &[("STEAM_MCP_ENABLE_WRITES", "true")]);
+    let sid = "76561197960287930";
+
+    let r = confirm_write(
+        &core,
+        10,
+        "steam_partner_add_inventory_items",
+        obj! { "appid" => 480, "steamid" => sid, "itemdefids" => steam_mcp::arr![100, 101] },
+        sid,
+    );
+    assert_eq!(r["result"]["isError"].as_bool(), Some(false), "{r}");
+
+    // Microtransactions must name sandbox or live explicitly.
+    let line = obj! { "itemid" => 5, "amount" => 199, "description" => "Hat" };
+    let r = call_tool(
+        &core,
+        "steam_partner_init_microtxn",
+        obj! { "appid" => 480, "steamid" => sid, "orderid" => 42, "currency" => "usd", "items" => steam_mcp::arr![line.clone()] },
+    );
+    assert!(r.to_string().contains("sandbox"), "{r}");
+    let args = obj! { "sandbox" => true, "appid" => 480, "steamid" => sid, "orderid" => 42, "currency" => "usd", "items" => steam_mcp::arr![line] };
+    let caps = obj! { "elicitation" => obj! { "form" => obj! {} } };
+    let (r, _) = send(
+        &core,
+        &request(
+            20,
+            "tools/call",
+            obj! { "name" => "steam_partner_init_microtxn", "arguments" => args.clone() },
+            caps,
+        ),
+    );
+    let msg = r["result"]["inputRequests"]["confirm"]["params"]["message"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        msg.contains("SANDBOX") && msg.contains("1× Hat (199)") && msg.contains("total 199 USD"),
+        "{msg}"
+    );
+    let r = confirm_write(&core, 30, "steam_partner_init_microtxn", args, "42");
+    assert_eq!(r["result"]["isError"].as_bool(), Some(false), "{r}");
+    {
+        let posts = mock.posts.lock().unwrap();
+        let (_, body) = posts
+            .iter()
+            .find(|(p, _)| p.ends_with("/InitTxn/v3/"))
+            .expect("InitTxn posted");
+        for part in [
+            "itemcount=1",
+            "currency=USD",
+            "amount%5B0%5D=199",
+            "description%5B0%5D=Hat",
+            "usersession=client",
+        ] {
+            assert!(body.contains(part), "{part} missing from {body}");
+        }
+    }
+    let r = call_tool(
+        &core,
+        "steam_partner_query_microtxn",
+        obj! { "appid" => 480, "orderid" => 42, "sandbox" => true },
+    );
+    assert_eq!(
+        r["result"]["structuredContent"]["params"]["status"].as_str(),
+        Some("Approved"),
+        "{r}"
+    );
+
+    // A failure inside a 200 response with a string result is an error.
+    let r = confirm_write(
+        &core,
+        40,
+        "steam_partner_refund_microtxn",
+        obj! { "sandbox" => false, "appid" => 480, "orderid" => 43 },
+        "43",
+    );
+    assert_eq!(r["result"]["isError"].as_bool(), Some(true), "{r}");
+    assert!(r.to_string().contains("Order not found"));
+
+    let r = confirm_write(
+        &core,
+        50,
+        "steam_partner_set_user_stats",
+        obj! { "appid" => 480, "steamid" => sid, "stats" => obj! { "kills" => 12 }, "achievements" => obj! { "ACH_WIN" => true } },
+        sid,
+    );
+    assert_eq!(r["result"]["isError"].as_bool(), Some(false), "{r}");
+    let r = confirm_write(
+        &core,
+        60,
+        "steam_partner_update_workshop_tags",
+        obj! { "appid" => 480, "publishedfileid" => 123, "add_tags" => steam_mcp::arr!["Maps"] },
+        "123",
+    );
+    assert_eq!(r["result"]["isError"].as_bool(), Some(false), "{r}");
+    let posts = mock.posts.lock().unwrap();
+    let stats = &posts
+        .iter()
+        .find(|(p, _)| p.contains("SetUserStatsForGame"))
+        .unwrap()
+        .1;
+    assert!(
+        stats.contains("count=2")
+            && stats.contains("name%5B1%5D=ACH_WIN")
+            && stats.contains("value%5B1%5D=1"),
+        "{stats}"
+    );
+    assert!(
+        posts
+            .iter()
+            .any(|(p, b)| p.contains("UpdateTags") && b.contains("add_tags%5B0%5D=Maps"))
+    );
+}
