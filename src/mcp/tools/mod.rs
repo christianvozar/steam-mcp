@@ -7,6 +7,7 @@
 pub mod admin;
 pub mod partner;
 pub mod public;
+pub mod store;
 
 use std::sync::Arc;
 
@@ -171,6 +172,7 @@ impl ToolDef {
 /// All tools in deterministic order.
 pub fn all_tools() -> Vec<ToolDef> {
     let mut v = public::tools();
+    v.extend(store::tools());
     v.extend(partner::tools());
     v.extend(admin::tools());
     v

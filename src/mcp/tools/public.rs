@@ -11,7 +11,7 @@ fn get(env: &ToolEnv, call: Call, args: &Map) -> Result<Lookup, SteamError> {
     env.steam().call(&call, force(args))
 }
 
-fn steamid_arg(args: &Map, key: &str) -> Result<u64, ToolOutcome> {
+pub(super) fn steamid_arg(args: &Map, key: &str) -> Result<u64, ToolOutcome> {
     let raw = arg_str(args, key)
         .map(String::from)
         .or_else(|| args.get(key).map(|v| v.to_param_string()))
@@ -48,7 +48,7 @@ macro_rules! tryo {
     };
 }
 
-fn store_url(appid: u64) -> String {
+pub(super) fn store_url(appid: u64) -> String {
     format!("https://store.steampowered.com/app/{appid}/")
 }
 
@@ -347,6 +347,26 @@ pub fn fetch_reviews(
 fn search_apps(env: &ToolEnv, args: &Map) -> ToolOutcome {
     let query = arg_str(args, "query").unwrap_or("");
     let limit = arg_u64(args, "limit").unwrap_or(10).clamp(1, 100) as usize;
+    if !env.steam().has_key(KeyKind::Public) && query.trim().parse::<u64>().is_err() {
+        // Without a key the full catalog is unavailable; the store search
+        // service covers name lookups.
+        let (results, total, l) =
+            try_steam!(super::store::store_search(env, query, limit.min(50), args));
+        let top: Vec<String> = results
+            .iter()
+            .take(5)
+            .filter_map(|r| Some(format!("{} ({})", r["name"].as_str()?, r["appid"])))
+            .collect();
+        return ok_result(
+            format!(
+                "{} store match(es) for '{query}': {}",
+                total,
+                top.join(", ")
+            ),
+            obj! { "query" => query, "source" => "IStoreQueryService/SearchSuggestions", "totalMatches" => total, "results" => results },
+            &[&l],
+        );
+    }
     env.progress(
         0.0,
         Some(1.0),
@@ -457,15 +477,19 @@ fn review_summary(env: &ToolEnv, args: &Map) -> ToolOutcome {
     let appid = arg_u64(args, "appid").unwrap_or(0);
     let language = arg_str(args, "language").unwrap_or("all");
     let purchase = arg_str(args, "purchase_type").unwrap_or("all");
-    let l = try_steam!(get(
-        env,
-        review_summary_call(appid, language, purchase),
-        args
-    ));
-    if l.negative {
-        return not_found(&format!("Reviews for app {appid}"));
-    }
-    let s = summarize_reviews(&l.value["query_summary"]);
+    // /appreviews is preferred (language and purchase filters); when the
+    // storefront refuses it (redirects some networks), fall back to the store
+    // browse service's all-language summary.
+    let (s, l) = match get(env, review_summary_call(appid, language, purchase), args) {
+        Ok(l) if !l.negative => (summarize_reviews(&l.value["query_summary"]), l),
+        primary => match super::store::store_review_summary(env, appid, args) {
+            Ok(v) => v,
+            Err(fallback_err) => match primary {
+                Err(e) => return steam_error(e),
+                Ok(_) => return steam_error(fallback_err),
+            },
+        },
+    };
     let text = format!(
         "App {appid}: {} — {}% positive ({} positive, {} negative, {} total).",
         s["reviewScoreDescription"]
@@ -1208,13 +1232,24 @@ fn most_played(env: &ToolEnv, args: &Map) -> ToolOutcome {
         args
     ));
     let limit = arg_u64(args, "limit").unwrap_or(25).clamp(1, 100) as usize;
-    let names = env.steam().catalog_if_cached();
-    let ranks: Vec<Value> = l.value.at(&["response", "ranks"]).as_array().cloned().unwrap_or_default()
+    let raw = l
+        .value
+        .at(&["response", "ranks"])
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let ids: Vec<u64> = raw
+        .iter()
+        .take(limit)
+        .filter_map(|r| r["appid"].as_u64())
+        .collect();
+    let names = super::store::app_names(env, &ids);
+    let ranks: Vec<Value> = raw
         .iter()
         .take(limit)
         .map(|r| {
             let appid = r["appid"].as_u64().unwrap_or(0);
-            let name = names.as_ref().and_then(|idx| idx.binary_search_by_key(&appid, |e| e.appid).ok().map(|i| idx[i].name.clone()));
+            let name = names.get(&appid).cloned();
             obj! { "rank" => r["rank"].clone(), "appid" => appid, "name" => name, "lastWeekRank" => r["last_week_rank"].clone(), "peakInGame" => r["peak_in_game"].clone() }
         })
         .collect();
@@ -1644,11 +1679,20 @@ pub fn app_overview_value(env: &ToolEnv, appid: u64, args: &Map) -> (Value, Vec<
             lookups.push(l);
             s
         }
-        Ok(_) => Value::Null,
-        Err(e) => {
-            errors.insert("reviews", e.message);
-            Value::Null
-        }
+        primary => match super::store::store_review_summary(env, appid, args) {
+            Ok((s, l)) => {
+                lookups.push(l);
+                s
+            }
+            Err(e) => {
+                let msg = match primary {
+                    Err(p) => p.message,
+                    Ok(_) => e.message,
+                };
+                errors.insert("reviews", msg);
+                Value::Null
+            }
+        },
     };
     env.progress(3.0, Some(total), "Fetching news");
     let news = match get(env, news_call(appid, 3, 300), args) {
@@ -1913,7 +1957,7 @@ pub fn tools() -> Vec<ToolDef> {
                     ],
                     &["query"],
                 ),
-                KeyKind::Public,
+                KeyKind::None,
                 search_apps,
             )
         },
