@@ -18,10 +18,22 @@ The **Key** column says which credential the call sends:
 
 The **Cache** column is the TTL class from `src/config.rs` (`TTL_CLASSES`).
 
-The **Verified** column records how much we know about the endpoint:
+The **Verified** column records the evidence, from a live run on 2026-11-22 from the build sandbox:
 
-- ✅ **mock** — exercised end to end against the mock in `tests/common/mod.rs`. The response *shape* follows the documented or observed Steam format.
-- ⚠️ **docs** — the method name, version and parameters come from Steamworks documentation as remembered while building this server. These have **not** been called against live Steam, because the build sandbox blocked Steam hosts. Verify them with a real key before relying on them. `steam_api_call` can reach any other version if one is wrong.
+- 🟢 **live** — called live without a key; the response parsed and the tool returned correct data.
+- 🟡 **exists** — probed live without a key. Steam answered "parameter missing" (400), "key required" (401/403) or "use POST" (405), which proves the method and version exist. Control probes for a fake method and a wrong version returned 404 HTML. Response *shape* and parameter names past the key check still need a keyed run.
+- 🔴 **open** — could not be verified from the sandbox.
+
+To close the gaps, run `cargo test --release --test live -- --ignored --nocapture` with real keys (see `tests/live.rs`). It exercises every tool and writes `target/live-report.md`.
+
+The live run found four bugs, now fixed:
+
+1. `IGameInventory/GetItemDefMeta` does not exist. The method is `IInventoryService/GetItemDefMeta/v1`.
+2. Partner `ISteamApps/GetServerList` requires `appid`.
+3. `ISteamApps/GetAppList/v2` was retired ("Method not found"). Catalog search now requires a key and uses `IStoreService/GetAppList`.
+4. The storefront answers `/appreviews` from the sandbox network with a 302 redirect to its home page. Redirects are now reported as transient errors (stale data is served), not parsed.
+
+The server also now reports any non-JSON 404 from an API host as "method or version is wrong or retired", so version mistakes surface immediately instead of looking like "no data".
 
 Response parsing is defensive everywhere: missing fields become `null`, and VDF-style `{name: {...}}` maps are flattened into arrays.
 
@@ -29,42 +41,42 @@ Response parsing is defensive everywhere: missing fields become `null`, and VDF-
 
 | Endpoint | Host | Key | Cache | Used by | Verified |
 | --- | --- | --- | --- | --- | --- |
-| `IStoreService/GetAppList/v1` (paged by `last_appid`, `max_results` 50000) | api | public | static | catalog, `steam_search_apps`, completion | ✅ mock |
-| `ISteamApps/GetAppList/v2` (fallback when no key) | api | none | static | catalog | ✅ mock |
-| `ISteamUserStats/GetNumberOfCurrentPlayers/v1` | api | none | realtime | `steam_get_current_players`, overview | ✅ mock |
-| `ISteamNews/GetNewsForApp/v2` | api | none | short | `steam_get_app_news`, overview | ✅ mock |
-| `ISteamUserStats/GetGlobalAchievementPercentagesForApp/v2` (`gameid`) | api | none | long | achievements, overview | ✅ mock |
-| `ISteamUserStats/GetSchemaForGame/v2` | api | public | static | `steam_get_game_schema` | ⚠️ docs |
-| `ISteamUserStats/GetGlobalStatsForGame/v1` (`name[i]`, `count`) | api | none | long | `steam_get_global_stats` | ⚠️ docs |
-| `ISteamUserStats/GetPlayerAchievements/v1` | api | public | short | `steam_get_player_achievements` | ⚠️ docs |
-| `ISteamUserStats/GetUserStatsForGame/v2` | api | public | short | `steam_get_user_stats_for_game` | ⚠️ docs |
-| `ISteamUser/GetPlayerSummaries/v2` (≤100 ids) | api | public | medium | summaries, profile | ✅ mock |
-| `ISteamUser/ResolveVanityURL/v1` | api | public | static | `steam_resolve_vanity_url` | ⚠️ docs |
-| `ISteamUser/GetFriendList/v1` | api | public | medium | `steam_get_friend_list` | ⚠️ docs |
-| `ISteamUser/GetPlayerBans/v1` | api | public | medium | bans, profile | ⚠️ docs |
-| `IPlayerService/GetOwnedGames/v1` (`appids_filter[i]`) | api | public | medium | `steam_get_owned_games` | ⚠️ docs |
-| `IPlayerService/GetRecentlyPlayedGames/v1` | api | public | short | recent, profile | ⚠️ docs |
-| `IPlayerService/GetSteamLevel/v1` | api | public | medium | level, profile | ⚠️ docs |
-| `IPlayerService/GetBadges/v1` | api | public | medium | `steam_get_badges` | ⚠️ docs |
-| `ISteamChartsService/GetMostPlayedGames/v1` | api | none | short | `steam_get_most_played_games` | ✅ mock |
-| `ISteamRemoteStorage/GetPublishedFileDetails/v1` (POST form) | api | none | medium | `steam_get_workshop_item_details` | ⚠️ docs |
-| `IPublishedFileService/QueryFiles/v1` (`query_type` enum, `requiredtags[i]`) | api | public | short | `steam_query_workshop_files` | ⚠️ docs |
-| `ISteamWebAPIUtil/GetSupportedAPIList/v1` | api / partner | optional / publisher | static | `steam_get_supported_api_list` | ✅ mock |
-| `IWishlistService/GetWishlist/v1` | api | optional | medium | `steam_get_wishlist` | ⚠️ docs |
-| `ISteamApps/GetServersAtAddress/v1` | api | none | short | `steam_get_servers_at_address` | ⚠️ docs |
-| `ISteamApps/UpToDateCheck/v1` | api | none | medium | `steam_check_app_up_to_date` | ⚠️ docs |
-| `IGameServersService/GetServerList/v1` | api | public | realtime | `steam_get_game_servers` | ⚠️ docs |
-| `IGameInventory/GetItemDefArchive/v1` (`digest`) | api | none | static (immutable per digest) | `steam_partner_get_item_definitions` | ⚠️ docs |
+| `IStoreService/GetAppList/v1` (paged by `last_appid`, `max_results` 50000) | api | public | static | catalog, `steam_search_apps`, completion | 🟡 exists (403 without key) |
+| `ISteamApps/GetAppList/v2` (fallback when no key) | api | none | static | catalog | ❌ retired upstream; fallback removed |
+| `ISteamUserStats/GetNumberOfCurrentPlayers/v1` | api | none | realtime | `steam_get_current_players`, overview | 🟢 live |
+| `ISteamNews/GetNewsForApp/v2` | api | none | short | `steam_get_app_news`, overview | 🟢 live |
+| `ISteamUserStats/GetGlobalAchievementPercentagesForApp/v2` (`gameid`) | api | none | long | achievements, overview | 🟢 live |
+| `ISteamUserStats/GetSchemaForGame/v2` | api | public | static | `steam_get_game_schema` | 🟡 exists |
+| `ISteamUserStats/GetGlobalStatsForGame/v1` (`name[i]`, `count`) | api | none | long | `steam_get_global_stats` | 🟢 live |
+| `ISteamUserStats/GetPlayerAchievements/v1` | api | public | short | `steam_get_player_achievements` | 🟡 exists |
+| `ISteamUserStats/GetUserStatsForGame/v2` | api | public | short | `steam_get_user_stats_for_game` | 🟡 exists |
+| `ISteamUser/GetPlayerSummaries/v2` (≤100 ids) | api | public | medium | summaries, profile | 🟡 exists |
+| `ISteamUser/ResolveVanityURL/v1` | api | public | static | `steam_resolve_vanity_url` | 🟡 exists |
+| `ISteamUser/GetFriendList/v1` | api | public | medium | `steam_get_friend_list` | 🟡 exists |
+| `ISteamUser/GetPlayerBans/v1` | api | public | medium | bans, profile | 🟡 exists |
+| `IPlayerService/GetOwnedGames/v1` (`appids_filter[i]`) | api | public | medium | `steam_get_owned_games` | 🟡 exists |
+| `IPlayerService/GetRecentlyPlayedGames/v1` | api | public | short | recent, profile | 🟡 exists |
+| `IPlayerService/GetSteamLevel/v1` | api | public | medium | level, profile | 🟡 exists |
+| `IPlayerService/GetBadges/v1` | api | public | medium | `steam_get_badges` | 🟡 exists |
+| `ISteamChartsService/GetMostPlayedGames/v1` | api | none | short | `steam_get_most_played_games` | 🟢 live |
+| `ISteamRemoteStorage/GetPublishedFileDetails/v1` (POST form) | api | none | medium | `steam_get_workshop_item_details` | 🟢 live |
+| `IPublishedFileService/QueryFiles/v1` (`query_type` enum, `requiredtags[i]`) | api | public | short | `steam_query_workshop_files` | 🟡 exists |
+| `ISteamWebAPIUtil/GetSupportedAPIList/v1` | api / partner | optional / publisher | static | `steam_get_supported_api_list` | 🟢 live |
+| `IWishlistService/GetWishlist/v1` | api | optional | medium | `steam_get_wishlist` | 🟢 live (works without a key) |
+| `ISteamApps/GetServersAtAddress/v1` | api | none | short | `steam_get_servers_at_address` | 🟢 live |
+| `ISteamApps/UpToDateCheck/v1` | api | none | medium | `steam_check_app_up_to_date` | 🟢 live |
+| `IGameServersService/GetServerList/v1` | api | public | realtime | `steam_get_game_servers` | 🟡 exists |
+| `IGameInventory/GetItemDefArchive/v1` (`digest`) | api | none | static (immutable per digest) | `steam_partner_get_item_definitions` | 🟡 exists |
 | any `I*/*/v*` GET | api / partner | optional / publisher | caller-chosen | `steam_api_call` | n/a |
 
 ## Storefront (unofficial but stable JSON endpoints)
 
 | Endpoint | Key | Cache | Used by | Verified |
 | --- | --- | --- | --- | --- |
-| `/api/appdetails?appids=&cc=&l=&filters=` | none | medium | details, overview, compare | ✅ mock |
-| `/api/packagedetails?packageids=&cc=` | none | medium | `steam_get_package_details` | ⚠️ docs |
-| `/api/featuredcategories?cc=&l=` | none | short | `steam_get_store_featured` | ✅ mock |
-| `/appreviews/{appid}?json=1&filter=&language=&review_type=&purchase_type=&num_per_page=&cursor=&day_range=` | none | short | reviews, summaries, overview | ✅ mock |
+| `/api/appdetails?appids=&cc=&l=&filters=` | none | medium | details, overview, compare | 🟢 live |
+| `/api/packagedetails?packageids=&cc=` | none | medium | `steam_get_package_details` | 🟢 live |
+| `/api/featuredcategories?cc=&l=` | none | short | `steam_get_store_featured` | 🟢 live |
+| `/appreviews/{appid}?json=1&filter=&language=&review_type=&purchase_type=&num_per_page=&cursor=&day_range=` | none | short | reviews, summaries, overview | 🔴 open: 302 to store home from the sandbox network |
 
 Storefront notes:
 
@@ -77,34 +89,34 @@ Storefront notes:
 
 | Endpoint | Cache | Used by | Verified |
 | --- | --- | --- | --- |
-| `ISteamApps/GetPartnerAppListForWebAPIKey/v2` (`type_filter`) | medium | partner list, resources, completion | ✅ mock |
-| `ISteamApps/GetAppBetas/v1` | partner_live | betas, write-confirmation prompt | ✅ mock |
-| `ISteamApps/GetAppBuilds/v1` | partner_live | `steam_partner_get_app_builds` | ✅ mock |
-| `ISteamApps/GetAppDepotVersions/v1` | partner_live | depots | ⚠️ docs |
-| `ISteamApps/GetPlayersBanned/v1` | short | banned players | ⚠️ docs |
-| `ISteamApps/GetCheatingReports/v1` | volatile | cheating reports | ⚠️ docs |
-| `ISteamApps/GetServerList/v1` | volatile | partner server list | ⚠️ docs |
-| `ISteamApps/SetAppBuildLive/v2` (**POST, write**) | never cached | `steam_partner_set_app_build_live` | ✅ mock (version ⚠️ docs) |
-| `ISteamUser/CheckAppOwnership/v2` | volatile | ownership check | ⚠️ docs (version may be newer) |
-| `ISteamUser/GetPublisherAppOwnership/v3` | volatile | publisher ownership | ⚠️ docs (version uncertain) |
-| `ISteamUser/GetPublisherAppOwnershipChanges/v1` | volatile | ownership changes | ⚠️ docs |
-| `ISteamUser/GetAppPriceInfo/v1` | short | price info | ⚠️ docs |
-| `ISteamUser/GetDeletedSteamIDs/v1` | medium | deleted ids | ⚠️ docs |
-| `ISteamUserAuth/AuthenticateUserTicket/v1` | never cached | ticket validation | ⚠️ docs |
-| `ISteamLeaderboards/GetLeaderboardsForGame/v2` | medium | leaderboards | ⚠️ docs |
-| `ISteamLeaderboards/GetLeaderboardEntries/v1` (`datarequest` = `RequestGlobal` / `RequestAroundUser` / `RequestFriends`) | short | entries | ⚠️ docs |
-| `ISteamMicroTxn[Sandbox]/GetReport/v5` | short | microtransaction report | ⚠️ docs |
-| `ISteamMicroTxn[Sandbox]/QueryTxn/v3` | volatile | query transaction | ⚠️ docs |
-| `IGameInventory/GetItemDefMeta/v1` | medium | item definitions (digest) | ⚠️ docs |
-| `IInventoryService/GetInventory/v1` | volatile | user inventory | ⚠️ docs |
-| `ISteamEconomy/GetAssetPrices/v1` | medium | asset prices | ⚠️ docs |
+| `ISteamApps/GetPartnerAppListForWebAPIKey/v2` (`type_filter`) | medium | partner list, resources, completion | 🟡 exists |
+| `ISteamApps/GetAppBetas/v1` | partner_live | betas, write-confirmation prompt | 🟡 exists |
+| `ISteamApps/GetAppBuilds/v1` | partner_live | `steam_partner_get_app_builds` | 🟡 exists |
+| `ISteamApps/GetAppDepotVersions/v1` | partner_live | depots | 🟡 exists |
+| `ISteamApps/GetPlayersBanned/v1` | short | banned players | 🟡 exists |
+| `ISteamApps/GetCheatingReports/v1` | volatile | cheating reports | 🟡 exists (all parameter names accepted) |
+| `ISteamApps/GetServerList/v1` | volatile | partner server list | 🟡 exists — **`appid` required** (fixed) |
+| `ISteamApps/SetAppBuildLive/v2` (**POST, write**) | never cached | `steam_partner_set_app_build_live` | 🟡 exists (POST-only confirmed) |
+| `ISteamUser/CheckAppOwnership/v2` | volatile | ownership check | 🟡 exists (v2 confirmed) |
+| `ISteamUser/GetPublisherAppOwnership/v3` | volatile | publisher ownership | 🟡 exists (v3 confirmed) |
+| `ISteamUser/GetPublisherAppOwnershipChanges/v1` | volatile | ownership changes | 🟡 exists |
+| `ISteamUser/GetAppPriceInfo/v1` | short | price info | 🟡 exists |
+| `ISteamUser/GetDeletedSteamIDs/v1` | medium | deleted ids | 🟡 exists |
+| `ISteamUserAuth/AuthenticateUserTicket/v1` | never cached | ticket validation | 🟡 exists |
+| `ISteamLeaderboards/GetLeaderboardsForGame/v2` | medium | leaderboards | 🟡 exists |
+| `ISteamLeaderboards/GetLeaderboardEntries/v1` (`datarequest` = `RequestGlobal` / `RequestAroundUser` / `RequestFriends`) | short | entries | 🟡 exists |
+| `ISteamMicroTxn[Sandbox]/GetReport/v5` | short | microtransaction report | 🟡 exists |
+| `ISteamMicroTxn[Sandbox]/QueryTxn/v3` | volatile | query transaction | 🟡 exists |
+| `IInventoryService/GetItemDefMeta/v1` | medium | item definitions (digest) | 🟡 exists as `IInventoryService` (fixed) |
+| `IInventoryService/GetInventory/v1` | volatile | user inventory | 🟡 exists |
+| `ISteamEconomy/GetAssetPrices/v1` | medium | asset prices | 🟡 exists |
 
 ## Financial API (Financial API group key, partner host)
 
 | Endpoint | Cache | Used by | Verified |
 | --- | --- | --- | --- |
-| `IPartnerFinancialsService/GetChangedDatesForPartner/v001` (`highwatermark`) | short | changed dates, date completion | ✅ mock |
-| `IPartnerFinancialsService/GetDetailedSales/v001` (`date`, `highwatermark_id`; paginate on `max_id`) | financial | detailed sales, sales summary | ✅ mock |
+| `IPartnerFinancialsService/GetChangedDatesForPartner/v001` (`highwatermark`) | short | changed dates, date completion | 🟡 exists (403 without key) |
+| `IPartnerFinancialsService/GetDetailedSales/v001` (`date`, `highwatermark_id`; paginate on `max_id`) | financial | detailed sales, sales summary | 🟡 exists (403 without key) |
 
 Sales rows are aggregated defensively. Every numeric field (numbers or numeric strings) whose name ends in `_usd` or contains `units` is summed. Names are joined from the `*_info` lookup tables in the response (`app_info`, `package_info`, `bundle_info`, `country_info`).
 

@@ -57,7 +57,7 @@ steam-mcp --print-config    # effective configuration (secrets redacted)
 
 ## Tools
 
-The tool list is filtered by the configured credentials and the caller's scopes. A server with no keys still offers the storefront and keyless Web API tools. Results include a human-readable summary, the JSON as text and `structuredContent`. Cache provenance is in `_meta["io.github.christianvozar/cache"]` (`hit`, `stale`, `miss`, `coalesced` or `stale-on-error`, plus age and TTL). Every tool also accepts `force_refresh`.
+The tool list is filtered by the configured credentials and the caller's scopes. A server with no keys still offers the storefront and keyless Web API tools. App search needs a key, because Valve retired the keyless app list. Results include a human-readable summary, the JSON as text and `structuredContent`. Cache provenance is in `_meta["io.github.christianvozar/cache"]` (`hit`, `stale`, `miss`, `coalesced` or `stale-on-error`, plus age and TTL). Every tool also accepts `force_refresh`.
 
 | Tool | Scope | Title |
 | --- | --- | --- |
@@ -130,7 +130,7 @@ Notes:
 - **`steam_summarize_reviews`** uses MRTR sampling when the client supports it. Otherwise it returns themes ranked by term frequency.
 - **`export_report`** (stdio only) runs any read-only data tool and writes the result as CSV or JSON into the client's first root, obtained through MRTR `roots/list`. It never overwrites a file and neutralises CSV formula injection.
 - **Task-capable tools** (`steam_search_apps`, `steam_get_app_reviews`, `steam_compare_apps`, `steam_partner_get_detailed_sales`, `steam_partner_sales_summary`) return a task handle when the client declares the tasks extension and the work takes longer than `STEAM_MCP_TASK_SYNC_WINDOW_MS`. While running as a task, a multi-page sales fetch that reaches its page limit asks the user through `tasks/update` whether to continue.
-- Partner endpoint versions follow the Steamworks documentation. If Valve publishes a new version, `steam_api_call` with `host=partner` reaches it immediately.
+- Every endpoint was checked against live Steam on 2026-11-22. 14 returned correct data without a key. The other 39 were confirmed to exist at the version we call, using unauthenticated probes. The live run found four bugs, all fixed; see `ref/steam-webapi.md` for the details. When Steam answers with an unknown method or version, the tool says so explicitly rather than reporting "no data". `steam_api_call` can reach any other method or version.
 
 ## Resources and prompts
 
@@ -284,6 +284,18 @@ See `examples/steam-mcp.conf` for an annotated configuration.
 
 - [`docs/adr/`](docs/adr/README.md) — architecture decision records (dependencies, protocol revision, caching, concurrency, MRTR state, auth, writes, tasks).
 - [`ref/`](ref/README.md) — pinned copies of the MCP 2026-07-28 spec and schema and the Tasks extension, a Steam endpoint inventory with verification status, and a requirement-to-code compliance map.
+
+## Live verification
+
+The normal test suite never contacts Steam. To verify against the real APIs with your own keys:
+
+```sh
+STEAM_API_KEY=… STEAM_PUBLISHER_KEY=… STEAM_FINANCIAL_KEY=… \
+STEAM_LIVE_APPID=<one of your apps> STEAM_LIVE_STEAMID=<a public profile> STEAM_LIVE_DATE=<a sales date> \
+  cargo test --release --test live -- --ignored --nocapture
+```
+
+The run calls every read-only tool whose credential is set and writes `target/live-report.md`. It fails only on endpoint-level problems (an unknown method or version, or rejected parameter names). Data-level outcomes, such as private profiles or a key without permission for an app, are reported but do not fail the run.
 
 ## Development
 
