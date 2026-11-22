@@ -13,24 +13,24 @@ use crate::steam::{Call, Host, KeyKind, parse_steamid};
 use crate::try_steam;
 
 /// A fully-resolved write, ready to confirm and execute.
-struct WriteOp {
+pub(super) struct WriteOp {
     /// Short verb phrase for the audit log, e.g. "leaderboard reset".
-    action: &'static str,
+    pub(super) action: &'static str,
     /// The question shown to the user.
-    prompt: String,
+    pub(super) prompt: String,
     /// What the user must type to confirm.
-    token: String,
+    pub(super) token: String,
     /// What the token is, e.g. "leaderboard ID".
-    token_label: &'static str,
-    call: Call,
+    pub(super) token_label: &'static str,
+    pub(super) call: Call,
     /// Cache keys containing all of the strings in any one entry are purged.
-    invalidate: Vec<Vec<String>>,
+    pub(super) invalidate: Vec<Vec<String>>,
     /// Response fields that are secrets: returned to the caller, never logged.
-    secret_fields: &'static [&'static str],
+    pub(super) secret_fields: &'static [&'static str],
     /// Summary for a successful result.
-    done: String,
+    pub(super) done: String,
     /// Non-secret identifying fields for the audit log and the result.
-    subject: Map,
+    pub(super) subject: Map,
 }
 
 fn fingerprint(tool: &str, args: &Map) -> String {
@@ -41,11 +41,11 @@ fn fingerprint(tool: &str, args: &Map) -> String {
 }
 
 /// Matches `name=value` exactly inside a cache key's sorted query string.
-fn param_match(name: &str, value: &str) -> [String; 2] {
+pub(super) fn param_match(name: &str, value: &str) -> [String; 2] {
     [format!("{name}={value}&"), format!("{name}={value}|")]
 }
 
-fn run_write(
+pub(super) fn run_write(
     env: &ToolEnv,
     tool: &str,
     args: &Map,
@@ -120,8 +120,12 @@ fn execute(env: &ToolEnv, op: WriteOp) -> ToolOutcome {
     };
     // Steam reports some failures inside a 200 response.
     let failed = resp["result"].as_u64().is_some_and(|r| r != 1)
+        || resp["result"]
+            .as_str()
+            .is_some_and(|r| !r.eq_ignore_ascii_case("OK"))
         || resp["success"].as_bool() == Some(false)
-        || resp["error"].is_string();
+        || resp["error"].is_string()
+        || resp["error"].is_object();
     if failed {
         return tool_error(format!("Steam rejected the {}: {resp}", op.action));
     }
@@ -157,7 +161,7 @@ fn execute(env: &ToolEnv, op: WriteOp) -> ToolOutcome {
     ok_result(format!("{}{note}", op.done), Value::Object(data), &[])
 }
 
-fn steamid(args: &Map, name: &str) -> Result<u64, ToolOutcome> {
+pub(super) fn steamid(args: &Map, name: &str) -> Result<u64, ToolOutcome> {
     let raw = args
         .get(name)
         .map(|v| v.to_param_string())
@@ -166,7 +170,7 @@ fn steamid(args: &Map, name: &str) -> Result<u64, ToolOutcome> {
         .ok_or_else(|| tool_error(format!("'{name}' must be a 64-bit SteamID, got '{raw}'.")))
 }
 
-fn need_u64(args: &Map, name: &str) -> Result<u64, ToolOutcome> {
+pub(super) fn need_u64(args: &Map, name: &str) -> Result<u64, ToolOutcome> {
     arg_u64(args, name).ok_or_else(|| tool_error(format!("'{name}' is required.")))
 }
 
@@ -510,7 +514,7 @@ fn set_gs_ban(env: &ToolEnv, args: &Map) -> ToolOutcome {
     run_write(env, "steam_partner_set_game_server_ban", args, op)
 }
 
-fn obj_map(pairs: &[(&str, Value)]) -> Map {
+pub(super) fn obj_map(pairs: &[(&str, Value)]) -> Map {
     let mut m = Map::new();
     for (k, v) in pairs {
         m.insert(*k, v.clone());
@@ -523,7 +527,7 @@ fn obj_map(pairs: &[(&str, Value)]) -> Map {
 // ---------------------------------------------------------------------------
 
 #[allow(clippy::too_many_arguments)]
-fn def(
+pub(super) fn def(
     name: &'static str,
     title: &'static str,
     desc: &str,

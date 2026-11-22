@@ -7,6 +7,7 @@
 pub mod admin;
 pub mod extended;
 pub mod partner;
+pub mod partner_writes;
 pub mod public;
 pub mod store;
 pub mod writes;
@@ -177,6 +178,7 @@ pub fn all_tools() -> Vec<ToolDef> {
     v.extend(store::tools());
     v.extend(extended::tools());
     v.extend(writes::tools());
+    v.extend(partner_writes::tools());
     v.extend(partner::tools());
     v.extend(admin::tools());
     v
