@@ -115,6 +115,33 @@ These protobuf-backed services take a JSON `input_json` parameter. Every keyless
 | `IPartnerStoreBrowseService/GetItems/v1` | partner | publisher | medium | `steam_partner_get_store_items` | 🟡 exists |
 | `IWorkshopService/GetFinalizedContributors/v1` | partner | publisher | medium | `steam_partner_get_workshop_contributors` | 🟡 exists |
 
+## Extended read coverage (added 2026-11-22)
+
+Group 1 of the parity plan: every remaining read-only method. 🟢 rows were called live without a key. 🟡 rows were confirmed to exist by probing (403/400 instead of the HTML 404 for unknown methods), and where possible their required parameters were taken from Steam's "Required parameter" errors. Keyed rows can only be fully verified with real keys through `tests/live.rs`.
+
+| Endpoint | Host | Key | Cache | Used by | Verified |
+| --- | --- | --- | --- | --- | --- |
+| `IPlayerService/GetProfileItemsEquipped/v1` (+ GetAnimatedAvatar, GetAvatarFrame, GetMiniProfileBackground, GetProfileBackground) | api | none | medium | `steam_get_profile_items` | 🟢 live |
+| `IStoreBrowseService/GetStoreCategories/v1` | api | none | static | `steam_get_store_categories` | 🟢 live (72 categories) |
+| `IStoreQueryService/Query/v1` (`query.filters.tagids_must_match`, `type_filters`, `price_filters`) | api | none | short | `steam_query_store` | 🟢 live |
+| `IWishlistService/GetWishlistSortedFiltered/v1` | api | none | medium | `steam_get_wishlist_detailed` | 🟡 answers `{}` for a private wishlist |
+| `IStoreBrowseService/GetDLCForApps/v1` | api | public | medium | `steam_get_dlc_for_apps` | 🟡 exists |
+| `IPlayerService/GetTopAchievementsForGames/v1` | api | public | short | `steam_get_top_achievements_for_games` | 🟡 exists |
+| `IPublishedFileService/GetDetails, GetUserFiles, GetSubSectionData/v1` | api | public | medium / short | workshop tools | 🟡 exist |
+| `ISteamRemoteStorage/GetUGCFileDetails/v1` (`ugcid`, `appid`) | api | public | long | `steam_get_ugc_file_details` | 🟡 required params from Steam errors |
+| `IGameServersService/GetAccountList, GetAccountPublicInfo, QueryLoginToken, GetServerSteamIDsByIP, GetServerIPsBySteamID/v1` | api | public | volatile–medium (QueryLoginToken uncached) | game-server tools | 🟡 exist |
+| `ISteamGameServerStats/GetGameServerPlayerStatsForGame/v1` | api | public | short | `steam_get_game_server_player_stats` | 🟡 checks the key first |
+| `ISteamNews/GetNewsForAppAuthed/v2` | partner | publisher | short | `steam_partner_get_news_authed` | 🟡 checks the key first |
+| `IWorkshopService/GetItemDailyRevenue/v1` | partner | publisher (financial scope) | financial | `steam_partner_get_workshop_item_revenue` | 🟡 exists |
+| `ISteamEconomy/GetMarketPrices` (`appid`), CanTrade (`appid`, `steamid`, `targetid`)/v1 | partner | publisher | short / volatile | market tools | 🟡 required params from Steam errors |
+| `IEconMarketService/GetPopular, GetAssetID, GetMarketEligibility/v1` | partner | publisher | short–volatile | market tools | 🟡 exist |
+| `IInventoryService/GetItemDefs, GetPriceSheet, GetQuantity/v1` | partner | publisher | medium / volatile | inventory tools | 🟡 exist |
+| `IGameInventory/GetUserHistory` (`appid`, `steamid`, `contextid`, `starttime`, `endtime`), GetHistoryCommandDetails (`command`, `arguments`), SupportGetAssetHistory (`assetid`)/v1 | partner | publisher | volatile / short | inventory history tools | 🟡 required params from Steam errors |
+| `IGameNotificationsService/EnumerateSessionsForApp, GetSessionDetailsForApp/v1` | partner | publisher | volatile | notification tools | 🟡 exist |
+| `ILobbyMatchmakingService/GetLobbyData/v1` | partner | publisher | volatile | `steam_partner_get_lobby_data` | 🟡 exists |
+| `ISteamMicroTxn[Sandbox]/GetUserInfo/v2, ISteamMicroTxn/GetUserAgreementInfo/v2` (`steamid`, `appid`) | partner | publisher | volatile | microtransaction tools | 🟡 required params from Steam errors |
+| `ICheatReportingService/RequestVacStatusForUser/v1` (POST) | partner | publisher | never cached | `steam_partner_get_vac_status` | 🟡 exists |
+
 ## Partner Web API (publisher key, `partner.steam-api.com`)
 
 | Endpoint | Cache | Used by | Verified |

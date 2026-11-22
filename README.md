@@ -57,7 +57,7 @@ steam-mcp --print-config    # effective configuration (secrets redacted)
 
 ## Tools
 
-The tool list is filtered by the configured credentials and the caller's scopes. A server with no keys still offers the storefront and keyless Web API tools. App search needs a key, because Valve retired the keyless app list. Results include a human-readable summary, the JSON as text and `structuredContent`. Cache provenance is in `_meta["io.github.christianvozar/cache"]` (`hit`, `stale`, `miss`, `coalesced` or `stale-on-error`, plus age and TTL). Every tool also accepts `force_refresh`.
+The tool list is filtered by the configured credentials and the caller's scopes. A server with no keys still offers the storefront and keyless Web API tools. Without a key, app search uses the store's search suggestions instead of the full app list, which Valve no longer serves keylessly. Results include a human-readable summary, the JSON as text and `structuredContent`. Cache provenance is in `_meta["io.github.christianvozar/cache"]` (`hit`, `stale`, `miss`, `coalesced` or `stale-on-error`, plus age and TTL). Every tool also accepts `force_refresh`.
 
 | Tool | Scope | Title |
 | --- | --- | --- |
@@ -114,6 +114,41 @@ The tool list is filtered by the configured credentials and the caller's scopes.
 | `steam_get_asset_class_info` | steam:public | Asset Class Info |
 | `steam_partner_get_store_items` | steam:partner | Partner Store Items |
 | `steam_partner_get_workshop_contributors` | steam:partner | Workshop Item Contributors |
+| `steam_get_profile_items` | steam:public | Equipped Profile Items |
+| `steam_get_top_achievements_for_games` | steam:public | Top Achievements per Game |
+| `steam_get_workshop_details` | steam:public | Workshop Details (Rich) |
+| `steam_get_user_workshop_files` | steam:public | User Workshop Files |
+| `steam_get_workshop_subsections` | steam:public | Workshop Sub-sections |
+| `steam_get_ugc_file_details` | steam:public | UGC File Details |
+| `steam_get_store_categories` | steam:public | Store Categories |
+| `steam_query_store` | steam:public | Browse Store |
+| `steam_get_wishlist_detailed` | steam:public | Wishlist with Store Data |
+| `steam_get_dlc_for_apps` | steam:public | DLC for Apps |
+| `steam_get_server_steamids_by_ip` | steam:public | Server SteamIDs by IP |
+| `steam_get_server_ips_by_steamid` | steam:public | Server IPs by SteamID |
+| `steam_get_game_server_accounts` | steam:public | Game Server Accounts |
+| `steam_get_game_server_account_info` | steam:public | Game Server Account Info |
+| `steam_query_game_server_token` | steam:public | Query Game Server Token |
+| `steam_get_game_server_player_stats` | steam:public | Game Server Player Stats |
+| `steam_partner_get_news_authed` | steam:partner | News (Including Unpublished) |
+| `steam_partner_get_workshop_item_revenue` | steam:financial | Workshop Item Revenue |
+| `steam_partner_get_market_prices` | steam:partner | Market Prices |
+| `steam_partner_can_trade` | steam:partner | Can Trade |
+| `steam_partner_get_market_popular` | steam:partner | Popular Market Listings |
+| `steam_partner_get_market_asset_id` | steam:partner | Market Listing Asset |
+| `steam_partner_get_market_eligibility` | steam:partner | Market Eligibility |
+| `steam_partner_get_inventory_item_defs` | steam:partner | Inventory Item Definitions (Service) |
+| `steam_partner_get_inventory_price_sheet` | steam:partner | Inventory Price Sheet |
+| `steam_partner_get_inventory_quantity` | steam:partner | Inventory Quantities |
+| `steam_partner_get_inventory_history` | steam:partner | Inventory History |
+| `steam_partner_get_inventory_history_command` | steam:partner | Inventory History Command |
+| `steam_partner_get_asset_history` | steam:partner | Asset History |
+| `steam_partner_get_notification_sessions` | steam:partner | Game Notification Sessions |
+| `steam_partner_get_notification_session_details` | steam:partner | Notification Session Details |
+| `steam_partner_get_lobby_data` | steam:partner | Lobby Data |
+| `steam_partner_get_microtxn_user_info` | steam:partner | Microtransaction User Info |
+| `steam_partner_get_microtxn_agreements` | steam:partner | Recurring Agreements |
+| `steam_partner_get_vac_status` | steam:partner | VAC Status |
 | `steam_partner_list_apps` | steam:partner | Partner App List |
 | `steam_partner_check_app_ownership` | steam:partner | Check App Ownership |
 | `steam_partner_get_publisher_app_ownership` | steam:partner | Publisher App Ownership |
@@ -151,6 +186,7 @@ Notes:
 - **`steam_summarize_reviews`** uses MRTR sampling when the client supports it. Otherwise it returns themes ranked by term frequency.
 - **`export_report`** (stdio only) runs any read-only data tool and writes the result as CSV or JSON into the client's first root, obtained through MRTR `roots/list`. It never overwrites a file and neutralises CSV formula injection.
 - **Keyless store services**: `steam_get_store_items`, `steam_search_store`, the charts and several other tools use Steam's protobuf-backed services (`input_json`), which need no key. `steam_search_apps` and review summaries fall back to them, so a server with no keys still gets name search and review scores. They are also what makes review scores available when the storefront's `/appreviews` endpoint refuses a network.
+- **Extended coverage** (`src/mcp/tools/extended.rs`): profile cosmetics, rich workshop details, store browsing by tag (`steam_query_store` accepts tag names), detailed wishlists, DLC lists, game-server accounts and tokens, Community Market and Inventory Service reads, inventory history, notification sessions, lobbies, microtransaction user data and VAC status. Partner tools map Steam's parameters one to one; required parameters were found from Steam's own error messages. `steam_query_game_server_token` and `steam_partner_get_vac_status` are never cached.
 - **Task-capable tools** (`steam_search_apps`, `steam_get_app_reviews`, `steam_compare_apps`, `steam_partner_get_detailed_sales`, `steam_partner_sales_summary`) return a task handle when the client declares the tasks extension and the work takes longer than `STEAM_MCP_TASK_SYNC_WINDOW_MS`. While running as a task, a multi-page sales fetch that reaches its page limit asks the user through `tasks/update` whether to continue.
 - Every endpoint was checked against live Steam on 2026-11-22. 14 returned correct data without a key. The other 39 were confirmed to exist at the version we call, using unauthenticated probes. The live run found four bugs, all fixed; see `ref/steam-webapi.md` for the details. When Steam answers with an unknown method or version, the tool says so explicitly rather than reporting "no data". `steam_api_call` can reach any other method or version.
 
