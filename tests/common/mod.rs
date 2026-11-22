@@ -171,6 +171,21 @@ fn respond(
         }
         "/ISteamChartsService/GetGamesByConcurrentPlayers/v1/" => (200, obj! { "response" => obj! { "last_update" => 1795370971u64, "ranks" => steam_mcp::arr![obj! { "rank" => 1, "appid" => 730, "concurrent_in_game" => 1000000, "peak_in_game" => 1200000 }] } }.to_string()),
         "/IGCVersion_440/GetServerVersion/v1/" => (200, obj! { "result" => obj! { "success" => true, "active_version" => 11191711, "min_allowed_version" => 11191711 } }.to_string()),
+        "/IPlayerService/GetProfileItemsEquipped/v1/" => (200, obj! { "response" => obj! { "profile_background" => obj! { "communityitemid" => "1", "item_title" => "Night Sky" }, "avatar_frame" => obj! {} } }.to_string()),
+        "/IStoreBrowseService/GetStoreCategories/v1/" => (200, obj! { "response" => obj! { "categories" => steam_mcp::arr![obj! { "categoryid" => 2, "type" => 2, "internal_name" => "singleplayer", "display_name" => "Single-player" }] } }.to_string()),
+        "/IStoreQueryService/Query/v1/" => {
+            let input = q.get("input_json").cloned().unwrap_or_default();
+            assert!(input.contains("\"tagids\":[492]"), "tag names resolve to ids: {input}");
+            (200, obj! { "response" => obj! { "metadata" => obj! { "total_matching_records" => 1234 }, "store_items" => steam_mcp::arr![obj! { "success" => 1, "appid" => 620, "name" => "Portal 2", "tagids" => steam_mcp::arr![492] }] } }.to_string())
+        }
+        "/IGameServersService/GetAccountList/v1/" => (200, obj! { "response" => obj! { "servers" => steam_mcp::arr![obj! { "steamid" => "85568392920040000", "appid" => 730, "memo" => "eu-1", "is_expired" => false }] } }.to_string()),
+        "/ISteamMicroTxn/GetUserAgreementInfo/v2/" => {
+            if !need(PUB_KEY) {
+                return (403, "Forbidden".into());
+            }
+            (200, obj! { "response" => obj! { "result" => "OK", "params" => obj! { "agreements" => steam_mcp::arr![obj! { "agreementid" => "7", "status" => "Active" }] } } }.to_string())
+        }
+        "/ICheatReportingService/RequestVacStatusForUser/v1/" => (200, obj! { "response" => obj! { "success" => true, "session_verified" => true } }.to_string()),
         "/jwks" => (200, mock.jwks.lock().unwrap().clone()),
         "/introspect" => {
             let expected = format!(

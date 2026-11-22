@@ -214,7 +214,71 @@ fn live_verification_report() {
             "steam_get_asset_class_info",
             obj! { "appid" => 440, "classids" => steam_mcp::arr![101785959u64] },
         ),
+        (
+            "steam_get_profile_items",
+            obj! { "steamid" => steamid.as_str() },
+        ),
+        ("steam_get_store_categories", obj! {}),
+        (
+            "steam_query_store",
+            obj! { "tags" => steam_mcp::arr!["Indie"], "count" => 3 },
+        ),
+        (
+            "steam_get_wishlist_detailed",
+            obj! { "steamid" => steamid.as_str(), "count" => 3 },
+        ),
+        (
+            "steam_get_dlc_for_apps",
+            obj! { "appids" => steam_mcp::arr![app] },
+        ),
+        (
+            "steam_get_top_achievements_for_games",
+            obj! { "steamid" => steamid.as_str(), "appids" => steam_mcp::arr![app] },
+        ),
+        (
+            "steam_get_workshop_details",
+            obj! { "publishedfileids" => steam_mcp::arr!["2064938225"] },
+        ),
+        (
+            "steam_get_user_workshop_files",
+            obj! { "steamid" => steamid.as_str(), "appid" => 440 },
+        ),
+        ("steam_get_game_server_accounts", obj! {}),
+        (
+            "steam_get_server_steamids_by_ip",
+            obj! { "ips" => steam_mcp::arr!["162.254.192.1:27015"] },
+        ),
         ("steam_partner_list_apps", obj! {}),
+        (
+            "steam_partner_get_news_authed",
+            obj! { "appid" => partner_app, "count" => 3 },
+        ),
+        (
+            "steam_partner_get_market_prices",
+            obj! { "appid" => partner_app },
+        ),
+        ("steam_partner_get_market_popular", obj! { "rows" => 3 }),
+        (
+            "steam_partner_get_market_eligibility",
+            obj! { "steamid" => steamid.as_str() },
+        ),
+        (
+            "steam_partner_get_inventory_item_defs",
+            obj! { "appid" => partner_app },
+        ),
+        ("steam_partner_get_inventory_price_sheet", obj! {}),
+        (
+            "steam_partner_get_microtxn_user_info",
+            obj! { "steamid" => steamid.as_str(), "sandbox" => true },
+        ),
+        (
+            "steam_partner_get_microtxn_agreements",
+            obj! { "steamid" => steamid.as_str(), "appid" => partner_app },
+        ),
+        (
+            "steam_partner_get_notification_sessions",
+            obj! { "appid" => partner_app, "steamid" => steamid.as_str() },
+        ),
         (
             "steam_partner_get_store_items",
             obj! { "appids" => steam_mcp::arr![partner_app] },

@@ -1345,3 +1345,94 @@ fn review_summary_falls_back_when_storefront_redirects() {
     assert_eq!(s["reviewScoreDescription"].as_str(), Some("Very Positive"));
     assert_eq!(s["totalPositive"].as_u64(), Some(180));
 }
+
+#[test]
+fn extended_read_tools() {
+    let mock = start_mock();
+    let core = core_with(&mock, &[]);
+    let r = call_tool(
+        &core,
+        "steam_get_profile_items",
+        obj! { "steamid" => "76561197960287930" },
+    );
+    let text = r["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    assert!(text.contains("profile_background: Night Sky"), "{r}");
+    assert!(
+        !text.contains("avatar_frame"),
+        "empty items are not reported as equipped"
+    );
+
+    let r = call_tool(&core, "steam_get_store_categories", obj! {});
+    assert_eq!(
+        r["result"]["structuredContent"]["categories"][0]["name"].as_str(),
+        Some("Single-player"),
+        "{r}"
+    );
+
+    let r = call_tool(
+        &core,
+        "steam_query_store",
+        obj! { "tags" => steam_mcp::arr!["indie"], "count" => 5 },
+    );
+    let s = &r["result"]["structuredContent"];
+    assert_eq!(s["totalMatches"].as_u64(), Some(1234), "{r}");
+    assert_eq!(s["items"][0]["tags"], steam_mcp::arr!["Indie"]);
+    let r = call_tool(
+        &core,
+        "steam_query_store",
+        obj! { "tags" => steam_mcp::arr!["no such tag"] },
+    );
+    assert_eq!(r["result"]["isError"].as_bool(), Some(true));
+
+    let r = call_tool(&core, "steam_get_game_server_accounts", obj! {});
+    assert_eq!(
+        r["result"]["structuredContent"]["servers"][0]["memo"].as_str(),
+        Some("eu-1"),
+        "{r}"
+    );
+
+    let r = call_tool(
+        &core,
+        "steam_partner_get_microtxn_agreements",
+        obj! { "steamid" => "76561197960287930", "appid" => 570 },
+    );
+    assert_eq!(
+        r["result"]["structuredContent"]["agreements"][0]["status"].as_str(),
+        Some("Active"),
+        "{r}"
+    );
+    let r = call_tool(
+        &core,
+        "steam_partner_get_microtxn_agreements",
+        obj! { "steamid" => "nope", "appid" => 570 },
+    );
+    assert_eq!(r["result"]["isError"].as_bool(), Some(true));
+
+    // VAC status is a POST and never cached.
+    for _ in 0..2 {
+        let r = call_tool(
+            &core,
+            "steam_partner_get_vac_status",
+            obj! { "steamid" => "76561197960287930", "appid" => 570 },
+        );
+        assert_eq!(
+            r["result"]["structuredContent"]["session_verified"].as_bool(),
+            Some(true),
+            "{r}"
+        );
+    }
+    assert_eq!(
+        mock.hits("/ICheatReportingService/RequestVacStatusForUser/v1/"),
+        2
+    );
+    assert!(
+        mock.posts
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(p, _)| p.contains("RequestVacStatusForUser"))
+    );
+}
