@@ -1436,3 +1436,145 @@ fn extended_read_tools() {
             .any(|(p, _)| p.contains("RequestVacStatusForUser"))
     );
 }
+
+fn confirm_write(
+    core: &std::sync::Arc<steam_mcp::mcp::server::Core>,
+    id: i64,
+    tool: &str,
+    args: Value,
+    typed: &str,
+) -> Value {
+    let caps = obj! { "elicitation" => obj! { "form" => obj! {} } };
+    let (r, _) = send(
+        core,
+        &request(
+            id,
+            "tools/call",
+            obj! { "name" => tool, "arguments" => args.clone() },
+            caps.clone(),
+        ),
+    );
+    assert_eq!(
+        r["result"]["resultType"].as_str(),
+        Some("input_required"),
+        "{r}"
+    );
+    let state = r["result"]["requestState"].as_str().unwrap().to_string();
+    let accept = obj! { "confirm" => obj! { "action" => "accept", "content" => obj! { "confirm" => true, "confirmation" => typed } } };
+    let (r, _) = send(
+        core,
+        &request(
+            id + 1,
+            "tools/call",
+            obj! { "name" => tool, "arguments" => args, "inputResponses" => accept, "requestState" => state.as_str() },
+            caps,
+        ),
+    );
+    r
+}
+
+#[test]
+fn gated_leaderboard_and_game_server_writes() {
+    let mock = start_mock();
+    // Hidden unless writes are enabled.
+    let core = core_with(&mock, &[]);
+    let (r, _) = send(&core, &request(1, "tools/list", obj! {}, obj! {}));
+    assert!(!r.to_string().contains("steam_partner_reset_leaderboard"));
+
+    let core = core_with(&mock, &[("STEAM_MCP_ENABLE_WRITES", "true")]);
+    let (r, _) = send(&core, &request(1, "tools/list", obj! {}, obj! {}));
+    assert!(
+        r.to_string().contains("steam_partner_reset_leaderboard"),
+        "{r}"
+    );
+
+    // Prime the leaderboard cache.
+    call_tool(
+        &core,
+        "steam_partner_get_leaderboards",
+        obj! { "appid" => 480 },
+    );
+    call_tool(
+        &core,
+        "steam_partner_get_leaderboards",
+        obj! { "appid" => 480 },
+    );
+    assert_eq!(
+        mock.hits("/ISteamLeaderboards/GetLeaderboardsForGame/v2/"),
+        1
+    );
+
+    let args = obj! { "appid" => 480, "leaderboardid" => 77 };
+    // The wrong confirmation asks again and changes nothing.
+    let r = confirm_write(
+        &core,
+        10,
+        "steam_partner_reset_leaderboard",
+        args.clone(),
+        "480",
+    );
+    assert_eq!(
+        r["result"]["resultType"].as_str(),
+        Some("input_required"),
+        "{r}"
+    );
+    assert!(
+        r["result"]["inputRequests"]["confirm"]["params"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("EVERY entry")
+    );
+    assert_eq!(mock.hits("/ISteamLeaderboards/ResetLeaderboard/v1/"), 0);
+
+    let r = confirm_write(&core, 20, "steam_partner_reset_leaderboard", args, "77");
+    assert_eq!(r["result"]["isError"].as_bool(), Some(false), "{r}");
+    assert_eq!(mock.hits("/ISteamLeaderboards/ResetLeaderboard/v1/"), 1);
+    // The cached leaderboard list was purged.
+    call_tool(
+        &core,
+        "steam_partner_get_leaderboards",
+        obj! { "appid" => 480 },
+    );
+    assert_eq!(
+        mock.hits("/ISteamLeaderboards/GetLeaderboardsForGame/v2/"),
+        2
+    );
+
+    // A failure reported inside a 200 response is an error.
+    let r = confirm_write(
+        &core,
+        30,
+        "steam_partner_delete_leaderboard",
+        obj! { "appid" => 480, "name" => "Gone" },
+        "Gone",
+    );
+    assert_eq!(r["result"]["isError"].as_bool(), Some(true), "{r}");
+
+    // Login tokens are returned once, flagged as secret.
+    let r = confirm_write(
+        &core,
+        40,
+        "steam_create_game_server_account",
+        obj! { "appid" => 730, "memo" => "eu-2" },
+        "730",
+    );
+    let res = &r["result"];
+    assert_eq!(
+        res["structuredContent"]["response"]["login_token"].as_str(),
+        Some("SECRETGSLT0123456789"),
+        "{r}"
+    );
+    assert!(
+        res["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("secret (login_token)")
+    );
+    let posts = mock.posts.lock().unwrap();
+    assert!(
+        posts
+            .iter()
+            .any(|(p, b)| p.ends_with("/CreateAccount/v1/") && b.contains("memo=eu-2")),
+        "{posts:?}"
+    );
+}

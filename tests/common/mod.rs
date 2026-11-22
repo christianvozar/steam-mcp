@@ -186,6 +186,10 @@ fn respond(
             (200, obj! { "response" => obj! { "result" => "OK", "params" => obj! { "agreements" => steam_mcp::arr![obj! { "agreementid" => "7", "status" => "Active" }] } } }.to_string())
         }
         "/ICheatReportingService/RequestVacStatusForUser/v1/" => (200, obj! { "response" => obj! { "success" => true, "session_verified" => true } }.to_string()),
+        "/ISteamLeaderboards/GetLeaderboardsForGame/v2/" => (200, obj! { "response" => obj! { "result" => 1, "leaderboards" => steam_mcp::arr![obj! { "id" => 77, "name" => "Fastest", "entries" => 3 }] } }.to_string()),
+        "/ISteamLeaderboards/ResetLeaderboard/v1/" => (200, obj! { "result" => obj! { "result" => 1 } }.to_string()),
+        "/ISteamLeaderboards/DeleteLeaderboard/v1/" => (200, obj! { "result" => obj! { "result" => 8, "message" => "Leaderboard not found" } }.to_string()),
+        "/IGameServersService/CreateAccount/v1/" => (200, obj! { "response" => obj! { "steamid" => "85568392920040001", "login_token" => "SECRETGSLT0123456789" } }.to_string()),
         "/jwks" => (200, mock.jwks.lock().unwrap().clone()),
         "/introspect" => {
             let expected = format!(
