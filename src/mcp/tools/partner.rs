@@ -377,11 +377,14 @@ fn cheating_reports(env: &ToolEnv, args: &Map) -> ToolOutcome {
 }
 
 fn partner_server_list(env: &ToolEnv, args: &Map) -> ToolOutcome {
+    // `appid` is required by Steam (verified live 2026-11-22).
+    let appid = arg_u64(args, "appid").unwrap_or(0);
     let filter = arg_str(args, "filter").unwrap_or("");
     let limit = arg_u64(args, "limit").unwrap_or(100).clamp(1, 20_000);
     let l = try_steam!(get(
         env,
         pcall("/ISteamApps/GetServerList/v1/", "volatile")
+            .param("appid", appid)
             .param("filter", filter)
             .param("limit", limit),
         args
@@ -392,7 +395,7 @@ fn partner_server_list(env: &ToolEnv, args: &Map) -> ToolOutcome {
             "{} server(s) returned.",
             servers.as_array().map(|a| a.len()).unwrap_or(0)
         ),
-        obj! { "filter" => filter, "servers" => servers },
+        obj! { "appid" => appid, "filter" => filter, "servers" => servers },
         &[&l],
     )
 }
@@ -541,7 +544,7 @@ fn item_definitions(env: &ToolEnv, args: &Map) -> ToolOutcome {
     let appid = arg_u64(args, "appid").unwrap_or(0);
     let meta = try_steam!(get(
         env,
-        pcall("/IGameInventory/GetItemDefMeta/v1/", "medium").param("appid", appid),
+        pcall("/IInventoryService/GetItemDefMeta/v1/", "medium").param("appid", appid),
         args
     ));
     let Some(digest) = meta
@@ -1376,11 +1379,15 @@ pub fn tools() -> Vec<ToolDef> {
             "Game servers for your apps via the partner master-server query.",
             object_schema(
                 vec![
-                    ("filter", p_str("Master server filter, e.g. \\appid\\480.")),
+                    ("appid", p_appid()),
+                    (
+                        "filter",
+                        p_str("Optional master server filter, e.g. \\dedicated\\1."),
+                    ),
                     ("limit", p_int("Maximum servers.", 1, 20000, Some(100))),
                     p_force(),
                 ],
-                &["filter"],
+                &["appid"],
             ),
             partner_server_list,
         ),
