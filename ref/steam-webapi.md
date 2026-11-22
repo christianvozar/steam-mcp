@@ -142,6 +142,23 @@ Group 1 of the parity plan: every remaining read-only method. 🟢 rows were cal
 | `ISteamMicroTxn[Sandbox]/GetUserInfo/v2, ISteamMicroTxn/GetUserAgreementInfo/v2` (`steamid`, `appid`) | partner | publisher | volatile | microtransaction tools | 🟡 required params from Steam errors |
 | `ICheatReportingService/RequestVacStatusForUser/v1` (POST) | partner | publisher | never cached | `steam_partner_get_vac_status` | 🟡 exists |
 
+## Gated writes (added 2026-11-22)
+
+All are POST, never cached, and need `STEAM_MCP_ENABLE_WRITES` plus a confirmation through form elicitation (ADR 0014). Their existence was probed live without a key: 400/403 versus 404 for an unknown method. Leaderboard parameter names were confirmed from Steam's "Required parameter" errors: FindOrCreateLeaderboard needs `name`; SetLeaderboardScore needs `leaderboardid`, `steamid`, `score` and `scoremethod`; Delete/Reset need `leaderboardid`; DeleteLeaderboard needs `name`.
+
+| Endpoint | Host | Key | Purges | Tool |
+| --- | --- | --- | --- | --- |
+| `ISteamLeaderboards/FindOrCreateLeaderboard/v2` | partner | publisher | leaderboard list | `steam_partner_create_leaderboard` |
+| `ISteamLeaderboards/SetLeaderboardScore/v1` | partner | publisher | board entries | `steam_partner_set_leaderboard_score` |
+| `ISteamLeaderboards/DeleteLeaderboardScore/v1` | partner | publisher | board entries | `steam_partner_delete_leaderboard_score` |
+| `ISteamLeaderboards/ResetLeaderboard/v1` | partner | publisher | list and entries | `steam_partner_reset_leaderboard` |
+| `ISteamLeaderboards/DeleteLeaderboard/v1` | partner | publisher | list and entries | `steam_partner_delete_leaderboard` |
+| `IGameServersService/CreateAccount/v1` (returns `login_token`) | api | public | account list | `steam_create_game_server_account` |
+| `IGameServersService/SetMemo/v1` | api | public | account list and info | `steam_set_game_server_memo` |
+| `IGameServersService/ResetLoginToken/v1` (returns `login_token`) | api | public | account list and info | `steam_reset_game_server_token` |
+| `IGameServersService/DeleteAccount/v1` | api | public | account list and info | `steam_delete_game_server_account` |
+| `IGameServersService/SetBanStatus/v1` | partner | publisher | account list and info | `steam_partner_set_game_server_ban` |
+
 ## Partner Web API (publisher key, `partner.steam-api.com`)
 
 | Endpoint | Cache | Used by | Verified |

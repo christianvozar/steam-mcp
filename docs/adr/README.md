@@ -15,5 +15,6 @@
 | [0011](0011-deprecated-features.md) | Deprecated features only with fallbacks | accepted |
 | [0012](0012-graceful-shutdown.md) | Graceful shutdown on SIGTERM/SIGINT without extra crates | accepted |
 | [0013](0013-transport-hardening.md) | Read deadlines, hangup detection, canonical tokens and JSON | accepted |
+| [0014](0014-generic-write-confirmation.md) | One confirmation gate for every state-changing tool | accepted |
 
 New ADRs copy [`0000-template.md`](0000-template.md) and take the next number.

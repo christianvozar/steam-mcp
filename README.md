@@ -149,6 +149,16 @@ The tool list is filtered by the configured credentials and the caller's scopes.
 | `steam_partner_get_microtxn_user_info` | steam:partner | Microtransaction User Info |
 | `steam_partner_get_microtxn_agreements` | steam:partner | Recurring Agreements |
 | `steam_partner_get_vac_status` | steam:partner | VAC Status |
+| `steam_partner_create_leaderboard` | steam:write | Create Leaderboard |
+| `steam_partner_set_leaderboard_score` | steam:write | Set Leaderboard Score |
+| `steam_partner_delete_leaderboard_score` | steam:write | Delete Leaderboard Score |
+| `steam_partner_reset_leaderboard` | steam:write | Reset Leaderboard |
+| `steam_partner_delete_leaderboard` | steam:write | Delete Leaderboard |
+| `steam_create_game_server_account` | steam:write | Create Game Server Account |
+| `steam_set_game_server_memo` | steam:write | Set Game Server Memo |
+| `steam_reset_game_server_token` | steam:write | Reset Game Server Token |
+| `steam_delete_game_server_account` | steam:write | Delete Game Server Account |
+| `steam_partner_set_game_server_ban` | steam:write | Ban Game Server Account |
 | `steam_partner_list_apps` | steam:partner | Partner App List |
 | `steam_partner_check_app_ownership` | steam:partner | Check App Ownership |
 | `steam_partner_get_publisher_app_ownership` | steam:partner | Publisher App Ownership |
@@ -183,6 +193,7 @@ Notes:
 
 - **`steam_api_call`** is a generic GET passthrough for any Web API method that has no dedicated tool. Use `steam_get_supported_api_list` to discover methods. It refuses methods whose names look state-changing, and it caches results under a TTL class you choose.
 - **`steam_partner_set_app_build_live`** only appears when `STEAM_MCP_ENABLE_WRITES=true`. With a client that supports form elicitation, the user is shown the branch's current build and must type the app ID to confirm. The confirmation is bound to the call through an HMAC-sealed `requestState`. A client that only supports URL elicitation is handed off to the Steamworks builds page so the user can make the change there; the server makes no API write in that case.
+- **Leaderboard and game server account writes** (`steam_partner_create_leaderboard`, `steam_partner_set_leaderboard_score`, `steam_partner_delete_leaderboard_score`, `steam_partner_reset_leaderboard`, `steam_partner_delete_leaderboard`, `steam_create_game_server_account`, `steam_set_game_server_memo`, `steam_reset_game_server_token`, `steam_delete_game_server_account`, `steam_partner_set_game_server_ban`) only appear when writes are enabled. Each needs form elicitation: the user types the target's identifier (leaderboard ID or name, server SteamID or app ID) to confirm. The affected cached reads are purged afterwards, and every write is audit-logged. Login tokens are returned once and never logged or cached. See ADR 0014.
 - **`steam_summarize_reviews`** uses MRTR sampling when the client supports it. Otherwise it returns themes ranked by term frequency.
 - **`export_report`** (stdio only) runs any read-only data tool and writes the result as CSV or JSON into the client's first root, obtained through MRTR `roots/list`. It never overwrites a file and neutralises CSV formula injection.
 - **Keyless store services**: `steam_get_store_items`, `steam_search_store`, the charts and several other tools use Steam's protobuf-backed services (`input_json`), which need no key. `steam_search_apps` and review summaries fall back to them, so a server with no keys still gets name search and review scores. They are also what makes review scores available when the storefront's `/appreviews` endpoint refuses a network.
