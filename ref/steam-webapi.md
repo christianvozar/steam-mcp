@@ -85,6 +85,36 @@ Storefront notes:
 - With `num_per_page=0`, `appreviews` returns only `query_summary`.
 - Review cursors contain `+` and `/` and must be percent-encoded. `build_query` does this.
 
+## Store services and charts (added 2026-11-22)
+
+These protobuf-backed services take a JSON `input_json` parameter. Every keyless one below was called live with real input and returned correct data.
+
+| Endpoint | Host | Key | Cache | Used by | Verified |
+| --- | --- | --- | --- | --- | --- |
+| `IStoreBrowseService/GetItems/v1` | api | none | medium (short for review fallback) | `steam_get_store_items`, review-summary fallback | 🟢 live |
+| `IStoreQueryService/SearchSuggestions/v1` | api | none | medium | `steam_search_store`, keyless `steam_search_apps` | 🟢 live |
+| `IStoreService/GetTagList/v1` | api | none | static | tag names | 🟢 live |
+| `IStoreService/GetMostPopularTags/v1` | api | none | static | `steam_get_store_tags` | 🟢 live |
+| `IStoreTopSellersService/GetWeeklyTopSellers/v1` | api | none | short | `steam_get_weekly_top_sellers` | 🟢 live |
+| `ICommunityService/GetApps/v1` | api | none | static | app-name resolution for charts and lists | 🟢 live |
+| `ISteamChartsService/GetGamesByConcurrentPlayers/v1` | api | none | realtime | `steam_get_top_concurrent_games` | 🟢 live |
+| `ISteamChartsService/GetMostPlayedSteamDeckGames/v1` | api | none | short | `steam_get_top_steam_deck_games` | 🟢 live |
+| `ISteamChartsService/GetTopReleasesPages/v1` | api | none | long | `steam_get_top_releases` | 🟢 live |
+| `ISteamRemoteStorage/GetCollectionDetails/v1` (POST) | api | none | medium | `steam_get_workshop_collection` | 🟢 live |
+| `IGCVersion_<appid>/GetClientVersion|GetServerVersion/v1` | api | none | realtime | `steam_get_gc_version` (440, 570, 730, 583950, 1046930, 1269260, 1422450) | 🟢 live |
+| `ISteamApps/GetSDRConfig/v1` | api | none | medium | `steam_get_sdr_config` | 🟢 live |
+| `IContentServerDirectoryService/GetDepotPatchInfo/v1` | api | none | static (immutable per manifest pair) | `steam_get_depot_patch_info` | 🟡 exists (answered for fake manifests) |
+| `IWishlistService/GetWishlistItemCount/v1` | api | none | medium | `steam_get_wishlist_count` | 🟢 live |
+| `IStoreService/GetGamesFollowed/v1` | api | none | medium | `steam_get_followed_games` | 🟢 live |
+| `IPublishedFileService/GetUserVoteSummary/v1` | api | public | short | `steam_get_workshop_vote_summary` | 🟡 exists; needs a key despite appearing in the keyless list |
+| `IPlayerService/GetSingleGamePlaytime/v1` | api | public | short | `steam_get_single_game_playtime` | 🟡 exists |
+| `IPlayerService/IsPlayingSharedGame/v1` (`appid_playing`) | api | public | volatile | `steam_is_playing_shared_game` | 🟡 exists |
+| `IPlayerService/GetCommunityBadgeProgress/v1` | api | public | medium | `steam_get_badge_progress` | 🟡 exists |
+| `ISteamUser/GetUserGroupList/v1` | api | public | medium | `steam_get_user_group_list` | 🟡 exists |
+| `ISteamEconomy/GetAssetClassInfo/v1` (`classid<i>`) | api | public | long | `steam_get_asset_class_info` | 🟡 exists |
+| `IPartnerStoreBrowseService/GetItems/v1` | partner | publisher | medium | `steam_partner_get_store_items` | 🟡 exists |
+| `IWorkshopService/GetFinalizedContributors/v1` | partner | publisher | medium | `steam_partner_get_workshop_contributors` | 🟡 exists |
+
 ## Partner Web API (publisher key, `partner.steam-api.com`)
 
 | Endpoint | Cache | Used by | Verified |

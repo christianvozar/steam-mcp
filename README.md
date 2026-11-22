@@ -93,6 +93,27 @@ The tool list is filtered by the configured credentials and the caller's scopes.
 | `steam_get_game_servers` | steam:public | Game Server List |
 | `steam_get_app_overview` | steam:public | App Overview |
 | `steam_compare_apps` | steam:public | Compare Apps |
+| `steam_get_store_items` | steam:public | Store Items (Batch) |
+| `steam_search_store` | steam:public | Search Store |
+| `steam_get_store_tags` | steam:public | Store Tags |
+| `steam_get_weekly_top_sellers` | steam:public | Weekly Top Sellers |
+| `steam_get_top_concurrent_games` | steam:public | Top Games by Concurrent Players |
+| `steam_get_top_steam_deck_games` | steam:public | Top Steam Deck Games |
+| `steam_get_top_releases` | steam:public | Top Releases by Month |
+| `steam_get_workshop_collection` | steam:public | Workshop Collections |
+| `steam_get_gc_version` | steam:public | Game Coordinator Version |
+| `steam_get_sdr_config` | steam:public | Steam Datagram Relay Config |
+| `steam_get_depot_patch_info` | steam:public | Depot Patch Info |
+| `steam_get_wishlist_count` | steam:public | Wishlist Count |
+| `steam_get_followed_games` | steam:public | Followed Games |
+| `steam_get_workshop_vote_summary` | steam:public | Workshop Vote Summary |
+| `steam_get_single_game_playtime` | steam:public | Single Game Playtime |
+| `steam_is_playing_shared_game` | steam:public | Family Sharing Check |
+| `steam_get_badge_progress` | steam:public | Community Badge Progress |
+| `steam_get_user_group_list` | steam:public | User Groups |
+| `steam_get_asset_class_info` | steam:public | Asset Class Info |
+| `steam_partner_get_store_items` | steam:partner | Partner Store Items |
+| `steam_partner_get_workshop_contributors` | steam:partner | Workshop Item Contributors |
 | `steam_partner_list_apps` | steam:partner | Partner App List |
 | `steam_partner_check_app_ownership` | steam:partner | Check App Ownership |
 | `steam_partner_get_publisher_app_ownership` | steam:partner | Publisher App Ownership |
@@ -129,17 +150,18 @@ Notes:
 - **`steam_partner_set_app_build_live`** only appears when `STEAM_MCP_ENABLE_WRITES=true`. With a client that supports form elicitation, the user is shown the branch's current build and must type the app ID to confirm. The confirmation is bound to the call through an HMAC-sealed `requestState`. A client that only supports URL elicitation is handed off to the Steamworks builds page so the user can make the change there; the server makes no API write in that case.
 - **`steam_summarize_reviews`** uses MRTR sampling when the client supports it. Otherwise it returns themes ranked by term frequency.
 - **`export_report`** (stdio only) runs any read-only data tool and writes the result as CSV or JSON into the client's first root, obtained through MRTR `roots/list`. It never overwrites a file and neutralises CSV formula injection.
+- **Keyless store services**: `steam_get_store_items`, `steam_search_store`, the charts and several other tools use Steam's protobuf-backed services (`input_json`), which need no key. `steam_search_apps` and review summaries fall back to them, so a server with no keys still gets name search and review scores. They are also what makes review scores available when the storefront's `/appreviews` endpoint refuses a network.
 - **Task-capable tools** (`steam_search_apps`, `steam_get_app_reviews`, `steam_compare_apps`, `steam_partner_get_detailed_sales`, `steam_partner_sales_summary`) return a task handle when the client declares the tasks extension and the work takes longer than `STEAM_MCP_TASK_SYNC_WINDOW_MS`. While running as a task, a multi-page sales fetch that reaches its page limit asks the user through `tasks/update` whether to continue.
 - Every endpoint was checked against live Steam on 2026-11-22. 14 returned correct data without a key. The other 39 were confirmed to exist at the version we call, using unauthenticated probes. The live run found four bugs, all fixed; see `ref/steam-webapi.md` for the details. When Steam answers with an unknown method or version, the tool says so explicitly rather than reporting "no data". `steam_api_call` can reach any other method or version.
 
 ## Resources and prompts
 
-Static resources include `steam://store/featured`, `steam://charts/most-played`, `steam://catalog/summary`, `steam://webapi/supported`, `steam://server/cache-stats` and `steam://partner/apps`. Each partner app is also listed as `steam://app/{appid}/overview`.
+Static resources include `steam://store/featured`, `steam://store/tags`, `steam://charts/most-played`, `steam://charts/top-concurrent`, `steam://charts/weekly-top-sellers`, `steam://charts/steam-deck`, `steam://catalog/summary`, `steam://webapi/supported`, `steam://server/cache-stats` and `steam://partner/apps`. Each partner app is also listed as `steam://app/{appid}/overview`.
 
 Resource templates (RFC 6570), all with argument completion:
 
 ```
-steam://app/{appid}/details | overview | players | news | reviews | achievements | schema
+steam://app/{appid}/details | store | overview | players | news | reviews | achievements | schema
 steam://player/{steamid}/profile | games | recent
 steam://partner/app/{appid}/betas | builds | depots | leaderboards
 steam://partner/sales/{date}
