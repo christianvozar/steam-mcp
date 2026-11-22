@@ -143,6 +143,34 @@ fn respond(
             };
             (200, obj! { "response" => obj! { "apps" => apps, "have_more_results" => more, "last_appid" => if more { 570 } else { 1000 } } }.to_string())
         }
+        "/IStoreBrowseService/GetItems/v1/" | "/IPartnerStoreBrowseService/GetItems/v1/" => {
+            let input = json::parse(q.get("input_json").map(String::as_str).unwrap_or("{}")).unwrap_or_default();
+            let items: Vec<Value> = input["ids"].as_array().cloned().unwrap_or_default().iter().map(|id| {
+                let appid = id["appid"].as_u64().unwrap_or(0);
+                if appid == 999 {
+                    obj! { "id" => appid, "success" => 15, "appid" => 0 }
+                } else {
+                    obj! {
+                        "id" => appid, "appid" => appid, "success" => 1, "name" => format!("App {appid}"),
+                        "tagids" => steam_mcp::arr![492, 19],
+                        "release" => obj! { "steam_release_date" => 1303186800u64 },
+                        "best_purchase_option" => obj! { "formatted_final_price" => "$9.99", "discount_pct" => 0 },
+                        "reviews" => obj! { "summary_filtered" => obj! { "review_count" => 200, "percent_positive" => 90, "review_score" => 8, "review_score_label" => "Very Positive" } },
+                        "platforms" => obj! { "windows" => true, "steam_deck_compat_category" => 2 },
+                    }
+                }
+            }).collect();
+            (200, obj! { "response" => obj! { "store_items" => items } }.to_string())
+        }
+        "/IStoreQueryService/SearchSuggestions/v1/" => (200, obj! { "response" => obj! { "metadata" => obj! { "total_matching_records" => 2 }, "store_items" => steam_mcp::arr![obj! { "success" => 1, "appid" => 570, "name" => "Dota 2" }, obj! { "success" => 1, "appid" => 1000, "name" => "Dota Underlords" }] } }.to_string()),
+        "/IStoreService/GetTagList/v1/" => (200, obj! { "response" => obj! { "tags" => steam_mcp::arr![obj! { "tagid" => 492, "name" => "Indie" }, obj! { "tagid" => 19, "name" => "Action" }] } }.to_string()),
+        "/ICommunityService/GetApps/v1/" => {
+            let input = json::parse(q.get("input_json").map(String::as_str).unwrap_or("{}")).unwrap_or_default();
+            let apps: Vec<Value> = input["appids"].as_array().cloned().unwrap_or_default().iter().filter_map(|a| a.as_u64()).map(|a| obj! { "appid" => a, "name" => format!("Name {a}") }).collect();
+            (200, obj! { "response" => obj! { "apps" => apps } }.to_string())
+        }
+        "/ISteamChartsService/GetGamesByConcurrentPlayers/v1/" => (200, obj! { "response" => obj! { "last_update" => 1795370971u64, "ranks" => steam_mcp::arr![obj! { "rank" => 1, "appid" => 730, "concurrent_in_game" => 1000000, "peak_in_game" => 1200000 }] } }.to_string()),
+        "/IGCVersion_440/GetServerVersion/v1/" => (200, obj! { "result" => obj! { "success" => true, "active_version" => 11191711, "min_allowed_version" => 11191711 } }.to_string()),
         "/jwks" => (200, mock.jwks.lock().unwrap().clone()),
         "/introspect" => {
             let expected = format!(

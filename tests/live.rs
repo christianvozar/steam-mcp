@@ -170,7 +170,55 @@ fn live_verification_report() {
             "steam_get_wishlist",
             obj! { "steamid" => steamid.as_str(), "limit" => 3 },
         ),
+        (
+            "steam_get_store_items",
+            obj! { "appids" => steam_mcp::arr![app, 570] },
+        ),
+        ("steam_search_store", obj! { "query" => "portal" }),
+        ("steam_get_store_tags", obj! { "popular_only" => true }),
+        ("steam_get_weekly_top_sellers", obj! { "count" => 3 }),
+        ("steam_get_top_concurrent_games", obj! { "limit" => 3 }),
+        ("steam_get_top_steam_deck_games", obj! { "limit" => 3 }),
+        ("steam_get_top_releases", obj! { "pages" => 1 }),
+        ("steam_get_gc_version", obj! { "appid" => 440 }),
+        ("steam_get_sdr_config", obj! { "appid" => 730 }),
+        (
+            "steam_get_wishlist_count",
+            obj! { "steamid" => steamid.as_str() },
+        ),
+        (
+            "steam_get_followed_games",
+            obj! { "steamid" => steamid.as_str() },
+        ),
+        (
+            "steam_get_workshop_vote_summary",
+            obj! { "publishedfileids" => steam_mcp::arr![2064938225u64] },
+        ),
+        (
+            "steam_get_single_game_playtime",
+            obj! { "steamid" => steamid.as_str(), "appid" => app },
+        ),
+        (
+            "steam_is_playing_shared_game",
+            obj! { "steamid" => steamid.as_str(), "appid" => app },
+        ),
+        (
+            "steam_get_badge_progress",
+            obj! { "steamid" => steamid.as_str() },
+        ),
+        (
+            "steam_get_user_group_list",
+            obj! { "steamid" => steamid.as_str() },
+        ),
+        (
+            "steam_get_asset_class_info",
+            obj! { "appid" => 440, "classids" => steam_mcp::arr![101785959u64] },
+        ),
         ("steam_partner_list_apps", obj! {}),
+        (
+            "steam_partner_get_store_items",
+            obj! { "appids" => steam_mcp::arr![partner_app] },
+        ),
         (
             "steam_partner_check_app_ownership",
             obj! { "steamid" => steamid.as_str(), "appid" => partner_app },

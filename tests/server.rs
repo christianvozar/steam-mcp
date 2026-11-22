@@ -1250,28 +1250,98 @@ fn config_reload_notifies_list_changes() {
 fn storefront_redirects_are_reported_not_parsed() {
     let mock = start_mock();
     let core = core_with(&mock, &[]);
-    let r = call_tool(&core, "steam_get_review_summary", obj! { "appid" => 9 });
+    // Full review text has no alternative source, so the redirect is reported.
+    let r = call_tool(&core, "steam_get_app_reviews", obj! { "appid" => 9 });
     assert_eq!(r["result"]["isError"].as_bool(), Some(true));
     let text = r["result"]["content"][0]["text"].as_str().unwrap();
     assert!(text.contains("redirected"), "{text}");
 }
 
 #[test]
-fn app_search_requires_a_key() {
+fn keyless_search_uses_store_suggestions() {
     let mock = start_mock();
     let core = core_with(&mock, &[("STEAM_API_KEY", ""), ("STEAM_PUBLISHER_KEY", "")]);
-    let (r, _) = send(
+    let r = call_tool(&core, "steam_search_apps", obj! { "query" => "dota" });
+    let res = &r["result"]["structuredContent"];
+    assert_eq!(
+        res["source"].as_str(),
+        Some("IStoreQueryService/SearchSuggestions"),
+        "{r}"
+    );
+    assert_eq!(res["results"][0]["appid"].as_u64(), Some(570));
+    assert_eq!(
+        mock.hits("/IStoreService/GetAppList/v1/"),
+        0,
+        "no keyed catalog call without a key"
+    );
+}
+
+#[test]
+fn store_tools_shape_data_and_resolve_names() {
+    let mock = start_mock();
+    let core = core_with(&mock, &[]);
+    let r = call_tool(
         &core,
-        &request(
-            1,
-            "tools/call",
-            obj! { "name" => "steam_search_apps", "arguments" => obj! { "query" => "dota" } },
-            obj! {},
-        ),
+        "steam_get_store_items",
+        obj! { "appids" => steam_mcp::arr![620, 999] },
+    );
+    let items = &r["result"]["structuredContent"]["items"];
+    assert_eq!(items[0]["tags"], steam_mcp::arr!["Indie", "Action"], "{r}");
+    assert_eq!(
+        items[0]["platforms"]["steamDeck"].as_str(),
+        Some("playable")
+    );
+    assert_eq!(items[0]["reviews"]["label"].as_str(), Some("Very Positive"));
+    assert!(items[1]["error"].is_string());
+
+    let r = call_tool(
+        &core,
+        "steam_get_top_concurrent_games",
+        obj! { "limit" => 1 },
     );
     assert_eq!(
-        r["error"]["code"].as_i64(),
-        Some(-32602),
-        "hidden without a key: {r}"
+        r["result"]["structuredContent"]["ranks"][0]["name"].as_str(),
+        Some("Name 730"),
+        "{r}"
     );
+    let r = call_tool(&core, "steam_get_most_played_games", obj! {});
+    assert_eq!(
+        r["result"]["structuredContent"]["ranks"][0]["name"].as_str(),
+        Some("Name 730")
+    );
+    // Names are cached: a second chart call does not refetch them.
+    call_tool(
+        &core,
+        "steam_get_most_played_games",
+        obj! { "force_refresh" => false },
+    );
+    assert_eq!(
+        mock.hits("/ICommunityService/GetApps/v1/"),
+        2,
+        "one lookup per distinct id set"
+    );
+
+    let r = call_tool(&core, "steam_get_gc_version", obj! { "appid" => 440 });
+    assert_eq!(
+        r["result"]["structuredContent"]["active_version"].as_u64(),
+        Some(11191711)
+    );
+    let r = call_tool(&core, "steam_get_gc_version", obj! { "appid" => 620 });
+    assert_eq!(r["result"]["isError"].as_bool(), Some(true));
+}
+
+#[test]
+fn review_summary_falls_back_when_storefront_redirects() {
+    let mock = start_mock();
+    let core = core_with(&mock, &[]);
+    // /appreviews/9 redirects (like the live storefront for some networks).
+    let r = call_tool(&core, "steam_get_review_summary", obj! { "appid" => 9 });
+    let s = &r["result"]["structuredContent"];
+    assert_eq!(
+        s["source"].as_str(),
+        Some("IStoreBrowseService/GetItems"),
+        "{r}"
+    );
+    assert_eq!(s["reviewScoreDescription"].as_str(), Some("Very Positive"));
+    assert_eq!(s["totalPositive"].as_u64(), Some(180));
 }
