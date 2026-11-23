@@ -5,6 +5,7 @@
 //! an MRTR `InputRequiredResult`, or a protocol error.
 
 pub mod admin;
+pub mod agent;
 pub mod extended;
 pub mod partner;
 pub mod partner_writes;
@@ -53,6 +54,11 @@ pub struct ToolEnv<'a> {
 impl ToolEnv<'_> {
     pub fn steam(&self) -> &Arc<crate::steam::SteamClient> {
         &self.core.steam
+    }
+
+    /// The calling principal.
+    pub fn principal(&self) -> &str {
+        &self.ctx.principal.id
     }
 
     pub fn cfg(&self) -> Arc<crate::config::Config> {
@@ -181,7 +187,21 @@ pub fn all_tools() -> Vec<ToolDef> {
     v.extend(partner_writes::tools());
     v.extend(partner::tools());
     v.extend(admin::tools());
+    v.extend(agent::tools());
+    for t in v.iter_mut().filter(|t| t.write) {
+        add_write_controls(t);
+    }
     v
+}
+
+/// Every state-changing tool accepts an idempotency key and a dry-run flag (ADR 0018).
+fn add_write_controls(t: &mut ToolDef) {
+    if let Some(Value::Object(props)) = t.input_schema.get_mut("properties") {
+        props.insert("idempotency_key", obj! { "type" => "string", "minLength" => 1, "maxLength" => 200, "pattern" => "^[!-~]+$", "description" => "Retry-safe key: repeating a call with the same key and arguments returns the first result instead of acting twice." });
+        props.insert("dry_run", obj! { "type" => "boolean", "default" => false, "description" => "Describe the change and the exact request without making it (no confirmation needed)." });
+    }
+    t.description
+        .push_str(" Accepts idempotency_key for safe retries and dry_run to preview the request.");
 }
 
 // ---------------------------------------------------------------------------

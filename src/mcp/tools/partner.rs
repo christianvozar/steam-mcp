@@ -1007,6 +1007,73 @@ fn sales_summary(env: &ToolEnv, args: &Map) -> ToolOutcome {
 // Writes (gated)
 // ---------------------------------------------------------------------------
 
+/// Performs SetAppBuildLive after it was confirmed or pre-approved.
+fn apply_build_live(
+    env: &ToolEnv,
+    appid: u64,
+    buildid: u64,
+    betakey: &str,
+    description: Option<&str>,
+    approved_by: &str,
+) -> ToolOutcome {
+    let v = try_steam!(env.steam().call_uncached(&build_live_call(
+        appid,
+        buildid,
+        betakey,
+        description
+    )));
+    let prefix = "partner:/ISteamApps/GetApp";
+    let purged = env
+        .steam()
+        .cache
+        .invalidate_where(|k| k.starts_with(prefix) && k.contains(&format!("appid={appid}")));
+    crate::log_info!(
+        "audit",
+        "build set live",
+        appid = appid,
+        buildid = buildid,
+        betakey = betakey,
+        principal = env.ctx.principal.id,
+        approved_by = approved_by
+    );
+    let agents = &env.core.agents;
+    agents.note(
+        env.principal(),
+        if approved_by.starts_with("write policy") {
+            "policy_write"
+        } else {
+            "write"
+        },
+    );
+    agents.audit(
+        env.principal(),
+        "steam_partner_set_app_build_live",
+        "build set live",
+        approved_by,
+        obj! { "appid" => appid, "buildid" => buildid, "betakey" => betakey },
+    );
+    ok_result(
+        format!(
+            "Build {buildid} is now live on branch '{betakey}' for app {appid} ({purged} cached entries refreshed)."
+        ),
+        obj! { "appid" => appid, "buildid" => buildid, "betakey" => betakey, "approvedBy" => approved_by, "response" => v },
+        &[],
+    )
+}
+
+fn build_live_call(appid: u64, buildid: u64, betakey: &str, description: Option<&str>) -> Call {
+    Call::post(
+        Host::Partner,
+        "/ISteamApps/SetAppBuildLive/v2/",
+        KeyKind::Publisher,
+        "volatile",
+    )
+    .param("appid", appid)
+    .param("buildid", buildid)
+    .param("betakey", betakey)
+    .opt_param("description", description)
+}
+
 fn set_build_live(env: &ToolEnv, args: &Map) -> ToolOutcome {
     let cfg = env.cfg();
     if !cfg.enable_writes {
@@ -1018,13 +1085,44 @@ fn set_build_live(env: &ToolEnv, args: &Map) -> ToolOutcome {
     let buildid = arg_u64(args, "buildid").unwrap_or(0);
     let betakey = arg_str(args, "betakey").unwrap_or("public");
     let description = arg_str(args, "description");
+    const TOOL: &str = "steam_partner_set_app_build_live";
+    let agents = &env.core.agents;
+    let target = appid.to_string();
+    let prompt = format!("Set build {buildid} live on branch '{betakey}' for app {appid}.");
+    if arg_bool(args, "dry_run", false) {
+        agents.note(env.principal(), "dry_run");
+        let approval = agents
+            .policy_match(&cfg, env.principal(), TOOL, &target)
+            .map(|(i, r)| super::writes::rule_text(i, &r));
+        return super::writes::dry_run_result(
+            TOOL,
+            "build set live",
+            &prompt,
+            "app ID",
+            &target,
+            approval,
+            &build_live_call(appid, buildid, betakey, description),
+            obj! { "appid" => appid, "buildid" => buildid, "betakey" => betakey },
+        );
+    }
+    // Operator-approved for unattended agents (ADR 0018).
+    if let Some((i, r)) = agents.policy_take(&cfg, env.principal(), TOOL, &target) {
+        return apply_build_live(
+            env,
+            appid,
+            buildid,
+            betakey,
+            description,
+            &super::writes::rule_text(i, &r),
+        );
+    }
     if !env.ctx.supports_elicitation_form() {
         if env.ctx.supports_elicitation_url() {
             return steamworks_handoff(env, appid, buildid, betakey);
         }
         return ToolOutcome::Error(McpError::missing_capability(
             obj! { "elicitation" => obj! { "form" => obj! {} } },
-            "setting a build live requires explicit user confirmation via form elicitation",
+            "setting a build live requires explicit user confirmation via form elicitation, or an operator rule in STEAM_MCP_WRITE_POLICY that pre-approves it for this principal",
         ));
     }
 
@@ -1042,35 +1140,13 @@ fn set_build_live(env: &ToolEnv, args: &Map) -> ToolOutcome {
                 if answer.at(&["content", "confirm"]).as_bool() == Some(true)
                     && typed == Some(appid)
                 {
-                    let call = Call::post(
-                        Host::Partner,
-                        "/ISteamApps/SetAppBuildLive/v2/",
-                        KeyKind::Publisher,
-                        "volatile",
-                    )
-                    .param("appid", appid)
-                    .param("buildid", buildid)
-                    .param("betakey", betakey)
-                    .opt_param("description", description);
-                    let v = try_steam!(env.steam().call_uncached(&call));
-                    let prefix = "partner:/ISteamApps/GetApp";
-                    let purged = env.steam().cache.invalidate_where(|k| {
-                        k.starts_with(prefix) && k.contains(&format!("appid={appid}"))
-                    });
-                    crate::log_info!(
-                        "audit",
-                        "build set live",
-                        appid = appid,
-                        buildid = buildid,
-                        betakey = betakey,
-                        principal = env.ctx.principal.id
-                    );
-                    return ok_result(
-                        format!(
-                            "Build {buildid} is now live on branch '{betakey}' for app {appid} ({purged} cached entries refreshed)."
-                        ),
-                        obj! { "appid" => appid, "buildid" => buildid, "betakey" => betakey, "response" => v },
-                        &[],
+                    return apply_build_live(
+                        env,
+                        appid,
+                        buildid,
+                        betakey,
+                        description,
+                        "user confirmation",
                     );
                 }
                 // Mismatched confirmation: ask again below.

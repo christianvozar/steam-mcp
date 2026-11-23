@@ -60,10 +60,33 @@ pub(super) fn run_write(
         Ok(op) => op,
         Err(o) => return o,
     };
+    let cfg = env.cfg();
+    let principal = env.principal().to_string();
+    let agents = &env.core.agents;
+    if arg_bool(args, "dry_run", false) {
+        agents.note(&principal, "dry_run");
+        let approval = agents
+            .policy_match(&cfg, &principal, tool, &op.token)
+            .map(|(i, r)| rule_text(i, &r));
+        return dry_run_result(
+            tool,
+            op.action,
+            &op.prompt,
+            op.token_label,
+            &op.token,
+            approval,
+            &op.call,
+            Value::Object(op.subject),
+        );
+    }
+    // Operator-approved writes for unattended agents (ADR 0018).
+    if let Some((i, r)) = agents.policy_take(&cfg, &principal, tool, &op.token) {
+        return execute(env, tool, op, &rule_text(i, &r));
+    }
     if !env.ctx.supports_elicitation_form() {
         return ToolOutcome::Error(McpError::missing_capability(
             obj! { "elicitation" => obj! { "form" => obj! {} } },
-            "this change requires explicit user confirmation via form elicitation",
+            "this change requires explicit user confirmation via form elicitation, or an operator rule in STEAM_MCP_WRITE_POLICY that pre-approves it for this principal",
         ));
     }
     let fp = fingerprint(tool, args);
@@ -76,7 +99,7 @@ pub(super) fn run_write(
         }
         let typed = answer.at(&["content", "confirmation"]).to_param_string();
         if answer.at(&["content", "confirm"]).as_bool() == Some(true) && typed.trim() == op.token {
-            return execute(env, op);
+            return execute(env, tool, op, "user confirmation");
         }
         // A mismatched confirmation falls through and asks again.
     }
@@ -102,6 +125,53 @@ pub(super) fn run_write(
     }
 }
 
+pub(super) fn rule_text(i: usize, r: &crate::config::WriteRule) -> String {
+    format!(
+        "write policy rule {} ({}|{}|{})",
+        i + 1,
+        r.principal,
+        r.tool,
+        r.target
+    )
+}
+
+/// The planned change, exactly as it would be sent (the key is added at send time and never shown).
+#[allow(clippy::too_many_arguments)]
+pub(super) fn dry_run_result(
+    tool: &str,
+    action: &str,
+    prompt: &str,
+    token_label: &str,
+    token: &str,
+    approval: Option<String>,
+    call: &crate::steam::Call,
+    subject: Value,
+) -> ToolOutcome {
+    let next = match &approval {
+        Some(a) => format!(" It is pre-approved by {a}, so it would run without confirmation."),
+        None => format!(" It needs confirmation: the user types the {token_label} ({token})."),
+    };
+    let params: Vec<Value> = call
+        .params
+        .iter()
+        .map(|(k, v)| obj! { "name" => k.as_str(), "value" => v.as_str() })
+        .collect();
+    ok_result(
+        format!("Dry run; nothing was changed. {prompt}{next}"),
+        obj! {
+            "dryRun" => true,
+            "tool" => tool,
+            "action" => action,
+            "summary" => prompt,
+            "confirmationTarget" => token,
+            "preApprovedBy" => approval,
+            "request" => obj! { "method" => format!("{:?}", call.method).to_ascii_uppercase(), "host" => call.host.as_str(), "path" => call.path.as_str(), "params" => params },
+            "subject" => subject,
+        },
+        &[],
+    )
+}
+
 fn capitalize(s: &str) -> String {
     let mut c = s.chars();
     c.next()
@@ -109,7 +179,7 @@ fn capitalize(s: &str) -> String {
         .unwrap_or_default()
 }
 
-fn execute(env: &ToolEnv, op: WriteOp) -> ToolOutcome {
+fn execute(env: &ToolEnv, tool: &str, op: WriteOp, approved_by: &str) -> ToolOutcome {
     let v = try_steam!(env.steam().call_uncached(&op.call));
     let resp = if v["response"].is_object() {
         v["response"].clone()
@@ -145,9 +215,27 @@ fn execute(env: &ToolEnv, op: WriteOp) -> ToolOutcome {
         op.action,
         subject = Value::Object(op.subject.clone()),
         principal = env.ctx.principal.id,
+        approved_by = approved_by,
         secrets_returned = redacted.join(",")
     );
+    let agents = &env.core.agents;
+    agents.note(
+        env.principal(),
+        if approved_by.starts_with("write policy") {
+            "policy_write"
+        } else {
+            "write"
+        },
+    );
+    agents.audit(
+        env.principal(),
+        tool,
+        op.action,
+        approved_by,
+        Value::Object(op.subject.clone()),
+    );
     let mut data = op.subject;
+    data.insert("approvedBy", approved_by);
     data.insert("response", resp);
     data.insert("cacheEntriesRefreshed", purged as u64);
     let note = if redacted.is_empty() {
@@ -158,7 +246,16 @@ fn execute(env: &ToolEnv, op: WriteOp) -> ToolOutcome {
             redacted.join(", ")
         )
     };
-    ok_result(format!("{}{note}", op.done), Value::Object(data), &[])
+    let mut out = ok_result(format!("{}{note}", op.done), Value::Object(data), &[]);
+    if !redacted.is_empty() {
+        if let ToolOutcome::Done(r) = &mut out {
+            r.set(
+                "_meta",
+                obj! { crate::mcp::agents::META_SECRET_FIELDS => redacted.clone() },
+            );
+        }
+    }
+    out
 }
 
 pub(super) fn steamid(args: &Map, name: &str) -> Result<u64, ToolOutcome> {
