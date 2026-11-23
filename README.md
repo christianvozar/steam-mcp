@@ -204,6 +204,9 @@ The tool list is filtered by the configured credentials and the caller's scopes.
 | `steam_api_call` | steam:partner | Steam Web API Call |
 | `export_report` | steam:public | Export Report |
 | `steam_summarize_reviews` | steam:public | Summarize Reviews |
+| `batch_call` | steam:public | Batch Read Calls |
+| `usage_stats` | steam:public | Usage and Quotas |
+| `audit_log` | steam:public | Write Audit Log |
 
 Notes:
 
@@ -217,6 +220,23 @@ Notes:
 - **Extended coverage** (`src/mcp/tools/extended.rs`): profile cosmetics, rich workshop details, store browsing by tag (`steam_query_store` accepts tag names), detailed wishlists, DLC lists, game-server accounts and tokens, Community Market and Inventory Service reads, inventory history, notification sessions, lobbies, microtransaction user data and VAC status. Partner tools map Steam's parameters one to one; required parameters were found from Steam's own error messages. `steam_query_game_server_token` and `steam_partner_get_vac_status` are never cached.
 - **Task-capable tools** (`steam_search_apps`, `steam_get_app_reviews`, `steam_compare_apps`, `steam_partner_get_detailed_sales`, `steam_partner_sales_summary`) return a task handle when the client declares the tasks extension and the work takes longer than `STEAM_MCP_TASK_SYNC_WINDOW_MS`. While running as a task, a multi-page sales fetch that reaches its page limit asks the user through `tasks/update` whether to continue.
 - Every endpoint was checked against live Steam on 2026-11-22. 14 returned correct data without a key. The other 39 were confirmed to exist at the version we call, using unauthenticated probes. The live run found four bugs, all fixed; see `ref/steam-webapi.md` for the details. When Steam answers with an unknown method or version, the tool says so explicitly rather than reporting "no data". `steam_api_call` can reach any other method or version.
+
+## Multi-agent use
+
+The server is built to be called by many agents at once, from unattended workflows (ADR 0018). Run it over HTTP with authentication, so each agent has its own principal (a static token, JWT `sub` or introspection subject), and every control below applies per principal.
+
+| Need | How |
+| --- | --- |
+| One agent must not starve the others | Each principal may run `STEAM_MCP_PRINCIPAL_MAX_CONCURRENT` calls at once (default 8). Extra calls wait up to `STEAM_MCP_PRINCIPAL_QUEUE_MS` for one of that principal's own calls to finish. |
+| Cap what an agent may spend | Daily tool-call and upstream-fetch budgets (`STEAM_MCP_PRINCIPAL_DAILY_TOOL_CALLS`, `STEAM_MCP_PRINCIPAL_DAILY_UPSTREAM`). Only cache misses count as upstream fetches, and an agent that has spent its budget still gets cached data. |
+| Different limits per agent | `STEAM_MCP_PRINCIPAL_LIMITS="ci-*=5:10:4:5000:500;dashboard=::16"`, with fields `rps:burst:concurrent:daily_calls:daily_upstream`. Empty fields keep the defaults. |
+| Retries must not repeat a write | Pass `idempotency_key` (or `_meta["io.github.christianvozar/idempotencyKey"]`). Repeating it returns the first result, marked `idempotentReplay`. Reusing the key with different arguments is refused. Secrets such as game server login tokens are not kept for replay. |
+| Writes without a person present | `STEAM_MCP_WRITE_POLICY="release-bot|steam_partner_set_app_build_live|480|20"` pre-approves that tool on that target for that principal, at most 20 times a day. Other writes still need confirmation. |
+| Check before acting | `dry_run: true` returns the exact request and whether a policy rule would approve it. |
+| Fewer round trips | `batch_call` runs up to 25 read calls in parallel, each with the usual checks and caching. |
+| See who uses what | `usage_stats` (yours, or everyone's with the admin scope), `audit_log` (writes and how each was approved), and per-principal series on `/metrics`. |
+
+Limits fail with JSON-RPC error `-31029`, with `data.reason` and `data.retryAfterMs`. Over HTTP this is a 429 with `Retry-After`. Quotas and idempotency records live in memory per instance, so route each principal to the same replica if you run several.
 
 ## Resources and prompts
 
@@ -394,6 +414,7 @@ The integration tests start a mock Steam server and drive the dispatcher, the HT
 
 - caching and coalescing, and stale-if-error;
 - MRTR flows (form and URL elicitation, sampling, roots), tasks and subscriptions;
+- multi-agent controls: per-principal quotas and queuing, upstream attribution, idempotent writes (with secret redaction), policy-approved writes, dry runs, batches and metering (`tests/agents.rs`);
 - auth: static tokens, HS256, RS256 through a fetched JWKS, and introspection;
 - header validation, slow-drip clients and TLS disconnects;
 - config hot reload;

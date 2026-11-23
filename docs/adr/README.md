@@ -16,5 +16,6 @@
 | [0012](0012-graceful-shutdown.md) | Graceful shutdown on SIGTERM/SIGINT without extra crates | accepted |
 | [0013](0013-transport-hardening.md) | Read deadlines, hangup detection, canonical tokens and JSON | accepted |
 | [0014](0014-generic-write-confirmation.md) | One confirmation gate for every state-changing tool | accepted |
+| [0018](0018-multi-agent-controls.md) | Serve many principals and unattended agents fairly and safely | accepted |
 
 New ADRs copy [`0000-template.md`](0000-template.md) and take the next number.
