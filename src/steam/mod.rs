@@ -43,9 +43,10 @@ impl Host {
 }
 
 /// Which credential a call requires.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum KeyKind {
     /// No key is sent.
+    #[default]
     None,
     /// The public key is sent when configured (some data is richer with it).
     Optional,
@@ -234,10 +235,16 @@ pub struct SteamClient {
     budget: Mutex<Budget>,
     pub stats: UpstreamStats,
     pub catalog: catalog::CatalogIndex,
+    /// Charges cache misses to the calling principal (ADR 0018).
+    agents: Arc<crate::mcp::agents::Agents>,
 }
 
 impl SteamClient {
-    pub fn new(config: ConfigHandle, cache: Arc<Cache>) -> Result<Arc<SteamClient>, String> {
+    pub fn new(
+        config: ConfigHandle,
+        cache: Arc<Cache>,
+        agents: Arc<crate::mcp::agents::Agents>,
+    ) -> Result<Arc<SteamClient>, String> {
         let cfg = config.get();
         let http = HttpClient::new(ClientOptions {
             io_timeout: Duration::from_secs(cfg.upstream_timeout_secs.max(1)),
@@ -258,6 +265,7 @@ impl SteamClient {
             config,
             stats: UpstreamStats::default(),
             catalog: catalog::CatalogIndex::default(),
+            agents,
         }))
     }
 
@@ -433,6 +441,13 @@ impl SteamClient {
                 });
             }
             self.charge_budget(&cfg)?;
+            self.agents
+                .charge_upstream(&cfg)
+                .map_err(|message| FetchError {
+                    message,
+                    status: None,
+                    transient: true,
+                })?;
             self.stats.calls.fetch_add(1, Ordering::Relaxed);
             self.stats.by_host[call.host as usize].fetch_add(1, Ordering::Relaxed);
             let started = Instant::now();

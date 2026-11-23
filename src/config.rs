@@ -69,6 +69,86 @@ pub struct AuthConfig {
     pub clock_skew_secs: u64,
 }
 
+/// Per-principal limit overrides (`PRINCIPAL_LIMITS`). `None` keeps the default.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PrincipalLimit {
+    /// Principal ID; `*` wildcards allowed.
+    pub principal: String,
+    pub rps: Option<f64>,
+    pub burst: Option<f64>,
+    pub max_concurrent: Option<u32>,
+    pub daily_calls: Option<u64>,
+    pub daily_upstream: Option<u64>,
+}
+
+/// A write pre-approved for an unattended principal (`WRITE_POLICY`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct WriteRule {
+    /// Principal ID; `*` wildcards allowed.
+    pub principal: String,
+    /// Tool name; `*` wildcards allowed.
+    pub tool: String,
+    /// The write's confirmation target (what a human would type); `*` wildcards allowed.
+    pub target: String,
+    /// Executions per principal per UTC day under this rule (0 = unlimited).
+    pub max_per_day: u64,
+}
+
+fn parse_principal_limits(spec: &str) -> Result<Vec<PrincipalLimit>, String> {
+    let mut out = Vec::new();
+    for item in spec.split(';').map(str::trim).filter(|s| !s.is_empty()) {
+        let (who, vals) = item.split_once('=').ok_or_else(|| format!("PRINCIPAL_LIMITS entry {item:?} must be principal=rps:burst:concurrent:daily_calls:daily_upstream"))?;
+        let f: Vec<&str> = vals.split(':').map(str::trim).collect();
+        let get = |i: usize| f.get(i).copied().filter(|v| !v.is_empty());
+        fn num<T: std::str::FromStr>(v: Option<&str>, item: &str) -> Result<Option<T>, String> {
+            v.map(|x| {
+                x.parse::<T>()
+                    .map_err(|_| format!("invalid number {x:?} in PRINCIPAL_LIMITS entry {item:?}"))
+            })
+            .transpose()
+        }
+        out.push(PrincipalLimit {
+            principal: who.trim().to_string(),
+            rps: num(get(0), item)?,
+            burst: num(get(1), item)?,
+            max_concurrent: num(get(2), item)?,
+            daily_calls: num(get(3), item)?,
+            daily_upstream: num(get(4), item)?,
+        });
+    }
+    Ok(out)
+}
+
+fn parse_write_policy(spec: &str) -> Result<Vec<WriteRule>, String> {
+    let mut out = Vec::new();
+    for item in spec.split(';').map(str::trim).filter(|s| !s.is_empty()) {
+        let f: Vec<&str> = item.split('|').map(str::trim).collect();
+        if f.len() < 3 || f.len() > 4 || f[..3].iter().any(|x| x.is_empty()) {
+            return Err(format!(
+                "WRITE_POLICY rule {item:?} must be principal|tool|target[|max_per_day]"
+            ));
+        }
+        if f[0] == "*" && f[1] == "*" {
+            return Err(format!(
+                "WRITE_POLICY rule {item:?} would approve every write for everyone; name a principal or a tool"
+            ));
+        }
+        let max = match f.get(3) {
+            Some(m) => m
+                .parse()
+                .map_err(|_| format!("invalid max_per_day in WRITE_POLICY rule {item:?}"))?,
+            None => 0,
+        };
+        out.push(WriteRule {
+            principal: f[0].into(),
+            tool: f[1].into(),
+            target: f[2].into(),
+            max_per_day: max,
+        });
+    }
+    Ok(out)
+}
+
 /// Cache TTL classes (seconds): (ttl, stale-while-revalidate window).
 pub const TTL_CLASSES: &[(&str, u64, u64, &str)] = &[
     (
@@ -150,6 +230,15 @@ pub struct Config {
     pub task_sync_window_ms: u64,
     pub task_ttl_secs: u64,
     pub client_rps: f64,
+    pub principal_max_concurrent: u32,
+    pub principal_queue_ms: u64,
+    pub principal_daily_tool_calls: u64,
+    pub principal_daily_upstream: u64,
+    pub principal_limits: Vec<PrincipalLimit>,
+    pub write_policy: Vec<WriteRule>,
+    pub idempotency_ttl_secs: u64,
+    pub batch_max_calls: usize,
+    pub batch_parallelism: usize,
     pub client_burst: f64,
     pub state_secret: Vec<u8>,
     pub watch_interval_secs: u64,
@@ -287,6 +376,42 @@ pub const KEYS: &[(&str, &str)] = &[
         "Per-principal request rate limit (default 20)",
     ),
     ("STEAM_MCP_CLIENT_BURST", "Per-principal burst (default 60)"),
+    (
+        "STEAM_MCP_PRINCIPAL_MAX_CONCURRENT",
+        "Concurrent tool calls allowed per principal (default 8; 0 = unlimited)",
+    ),
+    (
+        "STEAM_MCP_PRINCIPAL_QUEUE_MS",
+        "How long a call over the concurrency cap waits for a slot before it is rejected (default 5000)",
+    ),
+    (
+        "STEAM_MCP_PRINCIPAL_DAILY_TOOL_CALLS",
+        "Tool calls per principal per UTC day (default 0 = unlimited)",
+    ),
+    (
+        "STEAM_MCP_PRINCIPAL_DAILY_UPSTREAM",
+        "Upstream fetches charged to one principal per UTC day (default 0 = unlimited)",
+    ),
+    (
+        "STEAM_MCP_PRINCIPAL_LIMITS",
+        "Per-principal overrides: principal=rps:burst:concurrent:daily_calls:daily_upstream;... (empty fields keep defaults; * wildcards)",
+    ),
+    (
+        "STEAM_MCP_WRITE_POLICY",
+        "Writes pre-approved without elicitation: principal|tool|target[|max_per_day];... (* wildcards)",
+    ),
+    (
+        "STEAM_MCP_IDEMPOTENCY_TTL",
+        "Seconds an idempotent write result is kept for replay (default 86400)",
+    ),
+    (
+        "STEAM_MCP_BATCH_MAX_CALLS",
+        "Maximum calls in one batch_call (default 25)",
+    ),
+    (
+        "STEAM_MCP_BATCH_PARALLELISM",
+        "Parallel workers per batch_call (default 8)",
+    ),
     (
         "STEAM_MCP_STATE_SECRET",
         "Secret for integrity-protecting MRTR requestState; set the same value on every replica",
@@ -639,6 +764,48 @@ impl Config {
             )?,
             task_ttl_secs: num(get("STEAM_MCP_TASK_TTL"), "STEAM_MCP_TASK_TTL", 3600)?,
             client_rps: num(get("STEAM_MCP_CLIENT_RPS"), "STEAM_MCP_CLIENT_RPS", 20.0)?,
+            principal_max_concurrent: num(
+                get("STEAM_MCP_PRINCIPAL_MAX_CONCURRENT"),
+                "STEAM_MCP_PRINCIPAL_MAX_CONCURRENT",
+                8,
+            )?,
+            principal_queue_ms: num(
+                get("STEAM_MCP_PRINCIPAL_QUEUE_MS"),
+                "STEAM_MCP_PRINCIPAL_QUEUE_MS",
+                5000,
+            )?,
+            principal_daily_tool_calls: num(
+                get("STEAM_MCP_PRINCIPAL_DAILY_TOOL_CALLS"),
+                "STEAM_MCP_PRINCIPAL_DAILY_TOOL_CALLS",
+                0,
+            )?,
+            principal_daily_upstream: num(
+                get("STEAM_MCP_PRINCIPAL_DAILY_UPSTREAM"),
+                "STEAM_MCP_PRINCIPAL_DAILY_UPSTREAM",
+                0,
+            )?,
+            principal_limits: parse_principal_limits(
+                &get("STEAM_MCP_PRINCIPAL_LIMITS").unwrap_or_default(),
+            )?,
+            write_policy: parse_write_policy(&get("STEAM_MCP_WRITE_POLICY").unwrap_or_default())?,
+            idempotency_ttl_secs: num::<u64>(
+                get("STEAM_MCP_IDEMPOTENCY_TTL"),
+                "STEAM_MCP_IDEMPOTENCY_TTL",
+                86_400,
+            )?
+            .max(60),
+            batch_max_calls: num::<usize>(
+                get("STEAM_MCP_BATCH_MAX_CALLS"),
+                "STEAM_MCP_BATCH_MAX_CALLS",
+                25,
+            )?
+            .clamp(1, 200),
+            batch_parallelism: num::<usize>(
+                get("STEAM_MCP_BATCH_PARALLELISM"),
+                "STEAM_MCP_BATCH_PARALLELISM",
+                8,
+            )?
+            .clamp(1, 64),
             client_burst: num(
                 get("STEAM_MCP_CLIENT_BURST"),
                 "STEAM_MCP_CLIENT_BURST",
@@ -816,6 +983,14 @@ impl ConfigHandle {
             disabled_tools: fresh.disabled_tools,
             task_sync_window_ms: fresh.task_sync_window_ms,
             log_level: fresh.log_level,
+            principal_max_concurrent: fresh.principal_max_concurrent,
+            principal_queue_ms: fresh.principal_queue_ms,
+            principal_daily_tool_calls: fresh.principal_daily_tool_calls,
+            principal_daily_upstream: fresh.principal_daily_upstream,
+            principal_limits: fresh.principal_limits,
+            write_policy: fresh.write_policy,
+            batch_max_calls: fresh.batch_max_calls,
+            batch_parallelism: fresh.batch_parallelism,
             default_cc: fresh.default_cc,
             default_language: fresh.default_language,
             ..(*current).clone()
@@ -887,6 +1062,31 @@ mod tests {
             ]))
             .is_err()
         );
+    }
+
+    #[test]
+    fn agent_settings() {
+        let c = Config::from_map(&map(&[
+            ("STEAM_MCP_PRINCIPAL_LIMITS", "ci-*=5:10:2:1000:; vip=::16"),
+            (
+                "STEAM_MCP_WRITE_POLICY",
+                "ci-bot|*_send_*|streamer_one|50; ops|*|*",
+            ),
+        ]))
+        .unwrap();
+        assert_eq!(c.principal_limits[0].principal, "ci-*");
+        assert_eq!(c.principal_limits[0].rps, Some(5.0));
+        assert_eq!(c.principal_limits[0].daily_calls, Some(1000));
+        assert_eq!(c.principal_limits[0].daily_upstream, None);
+        assert_eq!(c.principal_limits[1].max_concurrent, Some(16));
+        assert_eq!(c.write_policy[0].max_per_day, 50);
+        assert_eq!(c.write_policy[1].max_per_day, 0);
+        assert!(
+            Config::from_map(&map(&[("STEAM_MCP_WRITE_POLICY", "*|*|x")])).is_err(),
+            "blanket approval is refused"
+        );
+        assert!(Config::from_map(&map(&[("STEAM_MCP_WRITE_POLICY", "a|b")])).is_err());
+        assert!(Config::from_map(&map(&[("STEAM_MCP_PRINCIPAL_LIMITS", "a=x")])).is_err());
     }
 
     #[test]

@@ -6,6 +6,7 @@
 //! * [`tasks`] — the `io.modelcontextprotocol/tasks` extension.
 //! * [`state`] — integrity-protected MRTR `requestState`.
 
+pub mod agents;
 pub mod completion;
 pub mod context;
 pub mod prompts;

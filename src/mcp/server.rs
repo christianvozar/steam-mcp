@@ -46,6 +46,8 @@ pub struct ServerStats {
 
 pub struct Core {
     pub config: ConfigHandle,
+    /// Per-principal quotas, idempotency, write policy and usage (ADR 0018).
+    pub agents: Arc<crate::mcp::agents::Agents>,
     pub steam: Arc<SteamClient>,
     pub sealer: StateSealer,
     pub tasks: TaskStore,
@@ -101,7 +103,8 @@ impl Core {
             persist_path: cfg.cache_file.clone(),
             persist_interval: Duration::from_secs(cfg.cache_persist_interval_secs.max(1)),
         });
-        let steam = SteamClient::new(config.clone(), cache)?;
+        let agents = crate::mcp::agents::Agents::new();
+        let steam = SteamClient::new(config.clone(), cache, agents.clone())?;
         let hub = Arc::new(Hub::new());
         let tasks = TaskStore::new();
         let h = hub.clone();
@@ -120,6 +123,7 @@ impl Core {
             persisted: Mutex::new(false),
             watch_state: Mutex::new(WatchState::default()),
             config,
+            agents,
             steam,
             hub,
             tasks,
@@ -231,12 +235,12 @@ impl Core {
                 return Reply::Response(error_response(Some(&id), &e), e.http_status);
             }
         };
-        if let Err(wait) = self.limiter.check(&principal.id) {
+        if let Err(e) = self
+            .agents
+            .check_rate(&self.config.get(), &principal.id, &self.limiter)
+        {
             self.stats.errors.fetch_add(1, Ordering::Relaxed);
-            {
-                let e = McpError::rate_limited(wait.as_millis() as u64 + 1);
-                return Reply::Response(error_response(Some(&id), &e), e.http_status);
-            }
+            return Reply::Response(error_response(Some(&id), &e), e.http_status);
         }
         if self.stop.load(Ordering::SeqCst) {
             let e = McpError::internal("Server is shutting down; retry against another instance")
@@ -255,9 +259,10 @@ impl Core {
             cancel,
         );
         let started = Instant::now();
-        let outcome =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.dispatch(&ctx, params)))
-                .unwrap_or_else(|_| Err(McpError::internal("internal server error")));
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::mcp::agents::with_principal(&ctx.principal.id, || self.dispatch(&ctx, params))
+        }))
+        .unwrap_or_else(|_| Err(McpError::internal("internal server error")));
         let elapsed = started.elapsed().as_millis();
         if ctx.is_cancelled() {
             crate::log_debug!(
@@ -467,6 +472,8 @@ impl Core {
             return Err(Self::insufficient_scope(tool.scope));
         }
         self.stats.tool_calls.fetch_add(1, Ordering::Relaxed);
+        let cfg_now = self.config.get();
+        let _permit = self.agents.admit(&cfg_now, &ctx.principal.id, name)?;
 
         // MRTR inputs.
         let responses = match p.get("inputResponses") {
@@ -500,7 +507,80 @@ impl Core {
                 "isError" => true,
             }));
         }
-        let args = args_value.as_object().cloned().unwrap_or_default();
+        let mut args = args_value.as_object().cloned().unwrap_or_default();
+        // Agents may request a dry run through _meta as well as the argument.
+        if tool.write
+            && ctx
+                .meta
+                .raw
+                .get(crate::mcp::agents::META_DRY_RUN)
+                .and_then(|v| v.as_bool())
+                == Some(true)
+        {
+            args.insert("dry_run", true);
+        }
+        let idem = if tool.write {
+            let key = args
+                .get("idempotency_key")
+                .and_then(|v| v.as_str())
+                .map(String::from)
+                .or_else(|| {
+                    ctx.meta
+                        .raw
+                        .get(crate::mcp::agents::META_IDEMPOTENCY_KEY)
+                        .and_then(|v| v.as_str())
+                        .map(String::from)
+                });
+            match key {
+                Some(k)
+                    if k.is_empty()
+                        || k.len() > 200
+                        || !k.bytes().all(|b| b.is_ascii_graphic()) =>
+                {
+                    return Err(McpError::invalid_params(
+                        "idempotency keys must be 1-200 printable ASCII characters",
+                    ));
+                }
+                Some(k) => {
+                    let mut fp_args = args.clone();
+                    fp_args.remove("idempotency_key");
+                    let fp = crate::util::crypto::sha256_hex(
+                        obj! { "tool" => name, "arguments" => Value::Object(fp_args) }
+                            .canonical()
+                            .to_string()
+                            .as_bytes(),
+                    );
+                    match self.agents.idem_begin(&cfg_now, &ctx.principal.id, &k, &fp) {
+                        crate::mcp::agents::IdemBegin::Fresh => Some((k, fp)),
+                        crate::mcp::agents::IdemBegin::Replay(mut r) => {
+                            self.agents.note(&ctx.principal.id, "replay");
+                            let mut meta = r.get("_meta").cloned().unwrap_or_else(Value::object);
+                            meta.set(crate::mcp::agents::META_REPLAYED, true);
+                            r.set("_meta", meta);
+                            return Ok(Dispatched::Result(r));
+                        }
+                        crate::mcp::agents::IdemBegin::InProgress => {
+                            return Err(McpError::new(crate::mcp::protocol::RATE_LIMITED, "A call with this idempotency key is still in progress")
+                                .with_data(obj! { "retryAfterMs" => 1000, "reason" => "idempotency_in_progress" })
+                                .http(409));
+                        }
+                        crate::mcp::agents::IdemBegin::Mismatch => {
+                            return Err(McpError::invalid_params(
+                                "This idempotency key was already used with different arguments; use a new key for a different change",
+                            ));
+                        }
+                    }
+                }
+                None => None,
+            }
+        } else {
+            None
+        };
+        let idem_done = |result: Option<&Value>| {
+            if let Some((k, fp)) = &idem {
+                self.agents.idem_complete(&ctx.principal.id, k, fp, result);
+            }
+        };
         ctx.log(
             LogLevel::Debug,
             "tools",
@@ -524,6 +604,8 @@ impl Core {
         match outcome {
             ToolOutcome::Done(r) => {
                 let is_error = r["isError"].as_bool() == Some(true);
+                self.agents.record(&ctx.principal.id, is_error);
+                idem_done(if is_error { None } else { Some(&r) });
                 if is_error {
                     self.stats.tool_errors.fetch_add(1, Ordering::Relaxed);
                 }
@@ -539,6 +621,7 @@ impl Core {
                 Ok(Dispatched::Result(r))
             }
             ToolOutcome::InputRequired { requests, state } => {
+                idem_done(None);
                 self.check_input_requests(ctx, &requests)?;
                 self.stats.input_required.fetch_add(1, Ordering::Relaxed);
                 let mut r = obj! { "resultType" => "input_required", "inputRequests" => Value::Object(requests) };
@@ -550,7 +633,97 @@ impl Core {
                 }
                 Ok(Dispatched::Result(r))
             }
-            ToolOutcome::Error(e) => Err(e),
+            ToolOutcome::Error(e) => {
+                self.agents.record(&ctx.principal.id, true);
+                idem_done(None);
+                Err(e)
+            }
+        }
+    }
+
+    /// Runs one read-only tool call inline (used by `batch_call`): lookup,
+    /// scope, quota, validation and the handler. Returns a batch item.
+    pub fn execute_read(
+        self: &Arc<Self>,
+        ctx: &RequestContext,
+        name: &str,
+        arguments: &Value,
+    ) -> Value {
+        let fail = |code: i64, msg: String| obj! { "tool" => name, "ok" => false, "error" => obj! { "code" => code, "message" => msg } };
+        let Some(tool) = self.find_tool(name).filter(|t| self.tool_enabled(t)) else {
+            return fail(
+                crate::mcp::protocol::INVALID_PARAMS,
+                format!("Unknown tool: {name}"),
+            );
+        };
+        if tool.write || !tool.hints.read_only || matches!(name, "batch_call" | "export_report") {
+            return fail(
+                crate::mcp::protocol::INVALID_PARAMS,
+                format!("{name} cannot run in a batch; only read-only tools can"),
+            );
+        }
+        if !ctx.principal.has_scope(tool.scope) {
+            let e = Self::insufficient_scope(tool.scope);
+            return fail(e.code, e.message);
+        }
+        let cfg = self.config.get();
+        let _permit = match self.agents.admit(&cfg, &ctx.principal.id, name) {
+            Ok(p) => p,
+            Err(e) => return obj! { "tool" => name, "ok" => false, "error" => e.to_json() },
+        };
+        self.stats.tool_calls.fetch_add(1, Ordering::Relaxed);
+        let mut args_value = match arguments {
+            Value::Null => Value::object(),
+            v @ Value::Object(_) => v.clone(),
+            _ => {
+                return fail(
+                    crate::mcp::protocol::INVALID_PARAMS,
+                    "'arguments' must be an object".into(),
+                );
+            }
+        };
+        schema::coerce(&tool.input_schema, &mut args_value);
+        if let Err(errs) = schema::validate(&tool.input_schema, &args_value) {
+            self.agents.record(&ctx.principal.id, true);
+            return fail(
+                crate::mcp::protocol::INVALID_PARAMS,
+                format!("Invalid arguments for {name}: {}", errs.join("; ")),
+            );
+        }
+        let args = args_value.as_object().cloned().unwrap_or_default();
+        let env = ToolEnv {
+            core: self,
+            ctx,
+            mrtr: Mrtr::default(),
+            task: None,
+        };
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::mcp::agents::with_principal(&ctx.principal.id, || (tool.handler)(&env, &args))
+        }))
+        .unwrap_or_else(|_| ToolOutcome::Error(McpError::internal("tool panicked")));
+        match outcome {
+            ToolOutcome::Done(r) => {
+                let is_error = r["isError"].as_bool() == Some(true);
+                self.agents.record(&ctx.principal.id, is_error);
+                if is_error {
+                    self.stats.tool_errors.fetch_add(1, Ordering::Relaxed);
+                }
+                obj! {
+                    "tool" => name,
+                    "ok" => !is_error,
+                    "text" => r.at(&["content", "0", "text"]).clone(),
+                    "structuredContent" => r["structuredContent"].clone(),
+                    "cache" => r.at(&["_meta", crate::mcp::tools::META_CACHE]).clone(),
+                }
+            }
+            ToolOutcome::InputRequired { .. } => fail(
+                crate::mcp::protocol::INVALID_PARAMS,
+                format!("{name} needs interactive input and cannot run in a batch"),
+            ),
+            ToolOutcome::Error(e) => {
+                self.agents.record(&ctx.principal.id, true);
+                obj! { "tool" => name, "ok" => false, "error" => e.to_json() }
+            }
         }
     }
 
@@ -624,7 +797,9 @@ impl Core {
                     task: Some(worker_task.clone()),
                 };
                 let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    (tool.handler)(&env, &args)
+                    crate::mcp::agents::with_principal(&worker_ctx.principal.id, || {
+                        (tool.handler)(&env, &args)
+                    })
                 }));
                 match outcome {
                     Ok(ToolOutcome::Done(mut r)) => {
@@ -1346,6 +1521,7 @@ impl Core {
             "gauge",
             u["dailyBudgetUsed"].to_string(),
         );
+        out.push_str(&self.agents.metrics("steam_mcp", 50));
         out
     }
 
